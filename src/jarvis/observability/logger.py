@@ -19,7 +19,10 @@ from zoneinfo import ZoneInfo
 
 from jarvis.config import LOG_DIR, AUDIT_LOG_PATH
 
-USER_TZ = ZoneInfo(os.environ.get("USER_TIMEZONE", "Europe/Athens"))
+try:
+    USER_TZ = ZoneInfo(os.environ.get("USER_TIMEZONE", "Europe/Athens"))
+except Exception:
+    USER_TZ = ZoneInfo("UTC")
 
 _action_counter = 0
 

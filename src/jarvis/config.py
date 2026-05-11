@@ -193,7 +193,10 @@ class ServerConfig:
 
     @property
     def tz(self) -> ZoneInfo:
-        return ZoneInfo(self.user_timezone)
+        try:
+            return ZoneInfo(self.user_timezone)
+        except Exception:
+            return ZoneInfo("UTC")
 
 
 @dataclass
