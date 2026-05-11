@@ -100,12 +100,22 @@ def rate_limit(key: str, max_requests: int = 60, window_s: int = 60) -> bool:
 # ─── App creation ─────────────────────────────────────────────────────────────
 
 def create_app() -> FastAPI:
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        from jarvis.memory.database import supervised_db_writer
+        db_task = asyncio.create_task(supervised_db_writer())
+        yield
+        db_task.cancel()
+
     app = FastAPI(
         title="JARVIS API",
         description="Autonomous Digital Assistant v6.0",
         version="6.0.0",
         docs_url="/docs",
         redoc_url=None,
+        lifespan=lifespan,
     )
 
     app.add_middleware(LimitBodySize)
@@ -341,6 +351,8 @@ def create_app() -> FastAPI:
     async def memory_search(q: str, days: int | None = None):
         from jarvis.memory.store import search_memories
         results = await search_memories(q, top_k=10, days_back=days)
+        for r in results:
+            r.pop("embedding", None)
         return {"query": q, "results": results}
 
     # ── Rollback ─────────────────────────────────────────────────────────────

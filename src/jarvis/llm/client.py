@@ -150,7 +150,17 @@ async def _ollama_call(
     }
 
     if tools:
-        payload["tools"] = tools
+        ollama_tools = []
+        for t in tools:
+            ollama_tools.append({
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema", t.get("parameters", {})),
+                },
+            })
+        payload["tools"] = ollama_tools
 
     timeout = aiohttp.ClientTimeout(total=120)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -263,7 +273,8 @@ async def run_agent(
                                 self.type = "tool_use"
                                 self.id = call.get("id", f"call_{iteration}")
                                 self.name = call.get("function", {}).get("name", "")
-                                self.input = json.loads(call.get("function", {}).get("arguments", "{}"))
+                                raw_args = call.get("function", {}).get("arguments", {})
+                                self.input = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
 
                         content_blocks = [_OllamaBlock(content)]
                         if tool_calls:
@@ -306,12 +317,28 @@ async def run_agent(
 
         if response_obj.stop_reason == "max_tokens":
             # v6 fix: continue from where it stopped
-            history.append({"role": "assistant", "content": response_obj.content})
+            if decision.provider == "ollama":
+                text_so_far = "".join(
+                    b.text for b in response_obj.content if hasattr(b, "text") and b.type == "text"
+                )
+                history.append({"role": "assistant", "content": text_so_far})
+            else:
+                history.append({"role": "assistant", "content": response_obj.content})
             history.append({"role": "user", "content": "Continue from where you stopped."})
             continue
 
         if response_obj.stop_reason == "tool_use":
-            history.append({"role": "assistant", "content": response_obj.content})
+            if decision.provider == "ollama":
+                ollama_tool_calls = []
+                for block in response_obj.content:
+                    if hasattr(block, "type") and block.type == "tool_use":
+                        ollama_tool_calls.append({
+                            "function": {"name": block.name, "arguments": block.input}
+                        })
+                history.append({"role": "assistant", "content": "", "tool_calls": ollama_tool_calls})
+            else:
+                history.append({"role": "assistant", "content": response_obj.content})
+
             tool_results = []
 
             for block in response_obj.content:
@@ -342,7 +369,11 @@ async def run_agent(
                     "content": str(result)[:50_000],  # cap at 50KB
                 })
 
-            history.append({"role": "user", "content": tool_results})
+            if decision.provider == "ollama":
+                for tr in tool_results:
+                    history.append({"role": "tool", "content": tr["content"]})
+            else:
+                history.append({"role": "user", "content": tool_results})
             continue
 
         # Unknown stop reason
