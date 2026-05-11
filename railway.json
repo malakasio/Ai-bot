@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "PYTHONPATH=src uvicorn jarvis.api.main:app --host 0.0.0.0 --port ${PORT:-8000}",
+    "startCommand": "uvicorn jarvis.api.main:app --host 0.0.0.0 --port $PORT",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
