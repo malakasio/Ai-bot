@@ -1,8 +1,8 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "python3 -m pip install -r requirements-railway.txt"
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
   },
   "deploy": {
     "startCommand": "PYTHONPATH=src uvicorn jarvis.api.main:app --host 0.0.0.0 --port ${PORT:-8000}",
