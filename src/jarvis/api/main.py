@@ -26,6 +26,7 @@ v6 fixes:
 - WebSocket heartbeat (30s ping)
 - Separate /webhooks/* path (no auth for Google)
 - Rate limiting on webhook endpoints
+- Telegram bot auto-starts on Railway via FastAPI lifespan
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ import json
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -97,6 +99,40 @@ def rate_limit(key: str, max_requests: int = 60, window_s: int = 60) -> bool:
     return True
 
 
+# ─── Lifespan (startup / shutdown tasks) ──────────────────────────────────────
+
+_telegram_task: asyncio.Task | None = None
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Start background services on boot, cancel them on shutdown."""
+    global _telegram_task
+
+    cfg = get_config()
+    if cfg.telegram.enabled:
+        log.info("Telegram bot enabled — starting in background")
+        try:
+            from jarvis.api.telegram_bot import start_telegram_bot
+            _telegram_task = asyncio.create_task(start_telegram_bot())
+        except Exception as e:
+            log.error(f"Telegram bot failed to start: {e}")
+    else:
+        log.info(
+            "Telegram bot disabled. Set TELEGRAM_BOT_TOKEN + TELEGRAM_USER_ID "
+            "to enable mobile control via Telegram."
+        )
+
+    yield  # app is running
+
+    if _telegram_task and not _telegram_task.done():
+        _telegram_task.cancel()
+        try:
+            await _telegram_task
+        except asyncio.CancelledError:
+            pass
+
+
 # ─── App creation ─────────────────────────────────────────────────────────────
 
 def create_app() -> FastAPI:
@@ -106,6 +142,7 @@ def create_app() -> FastAPI:
         version="6.0.0",
         docs_url="/docs",
         redoc_url=None,
+        lifespan=_lifespan,
     )
 
     app.add_middleware(LimitBodySize)

@@ -5,8 +5,9 @@
     "buildCommand": "pip install -r requirements-railway.txt"
   },
   "deploy": {
-    "startCommand": "uvicorn jarvis.api.main:app --host 0.0.0.0 --port ${PORT:-8000}",
+    "startCommand": "PYTHONPATH=src uvicorn jarvis.api.main:app --host 0.0.0.0 --port ${PORT:-8000}",
     "healthcheckPath": "/health",
+    "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
   }
