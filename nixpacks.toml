@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["python311", "gcc", "ffmpeg"]
+nixPkgs = ["python311", "python311Packages.pip", "python311Packages.setuptools", "gcc", "ffmpeg"]
 
 [phases.install]
 cmds = ["python3 -m pip install -r requirements-railway.txt"]
