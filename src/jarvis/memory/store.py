@@ -158,6 +158,15 @@ async def save_memory(
     Save to long-term memory (L3).
     Automatically generates and stores embedding.
     """
+    # Strip PII before storing (if enabled)
+    cfg = get_config()
+    if cfg.security.pii_detection:
+        try:
+            from jarvis.security.zones import sanitize_pii
+            content = sanitize_pii(content)
+        except Exception:
+            pass  # PII stripping is best-effort
+
     try:
         embedding = await embed_text(content)
         embedding_bytes = pack_embedding(embedding)
@@ -195,6 +204,11 @@ async def search_memories(
     v5 fix: vector-only was missing keyword hits.
     """
     cfg = get_config()
+    # Use config values instead of hardcoded literals
+    if top_k == 5:  # default → use config
+        top_k = cfg.memory.memory_retrieval_top_k
+    if min_similarity == 0.6:  # default → use config
+        min_similarity = cfg.memory.similarity_threshold
     try:
         query_vec = await embed_text(query)
     except Exception as e:

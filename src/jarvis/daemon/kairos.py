@@ -186,12 +186,12 @@ class KAIROSDaemon:
         """Main KAIROS poll loop — every 5 minutes."""
         cfg = get_config()
         while self._running:
-            try:
-                await self._poll_once()
-            except Exception as e:
-                log.error(f"KAIROS poll error: {e}", exc_info=True)
-
-            get_metrics().kairos_runs.inc()
+            if _accepting_tasks:
+                try:
+                    await self._poll_once()
+                except Exception as e:
+                    log.error(f"KAIROS poll error: {e}", exc_info=True)
+                get_metrics().kairos_runs.inc()
             await asyncio.sleep(cfg.kairos.poll_interval_s)
 
     async def _poll_once(self):
@@ -233,7 +233,17 @@ class KAIROSDaemon:
         )
 
         for task_row in pending:
+            if not _accepting_tasks:
+                break
             try:
+                # Claim the task atomically before processing
+                from jarvis.memory.database import db_write as _dw
+                await _dw(
+                    "UPDATE tasks SET status='running', started_at=unixepoch('now'), agent_id=? "
+                    "WHERE id=? AND status='pending'",
+                    ("kairos_worker", task_row["id"]),
+                )
+
                 payload = json.loads(task_row["payload"])
                 task_text = payload.get("text", str(payload))
 
@@ -252,7 +262,7 @@ class KAIROSDaemon:
                 log.error(f"Background task {task_row['id'][:8]} failed: {e}")
 
     async def _run_dream(self):
-        """Trigger autoDream memory consolidation."""
+        """Trigger autoDream memory consolidation + compress idle sessions."""
         log.info("KAIROS: triggering autoDream")
         self._last_dream_time = time.time()
         try:
@@ -261,6 +271,41 @@ class KAIROSDaemon:
             await run_auto_dream(simple_completion)
         except Exception as e:
             log.error(f"autoDream failed: {e}")
+
+        # Compress idle sessions: summarise L2 messages → L3 memory
+        try:
+            from jarvis.memory.database import db_fetch_all
+            from jarvis.memory.store import compress_session
+            from jarvis.llm.client import simple_completion
+            cfg = get_config()
+            idle_cutoff = time.time() - cfg.memory.session_compression_idle_s
+            idle_sessions = await db_fetch_all(
+                """SELECT DISTINCT session_id FROM sessions
+                   WHERE compressed=0
+                   GROUP BY session_id
+                   HAVING MAX(created_at) < ?""",
+                (idle_cutoff,),
+            )
+            for row in idle_sessions[:10]:
+                try:
+                    await compress_session(row["session_id"], simple_completion)
+                    log.info(f"Compressed session {row['session_id'][:12]}")
+                except Exception as e:
+                    log.warning(f"Session compress failed: {e}")
+        except Exception as e:
+            log.error(f"Session compression sweep failed: {e}")
+
+        # Prune old raw memories past retention window
+        try:
+            cfg = get_config()
+            cutoff = time.time() - cfg.memory.raw_log_retention_days * 86400
+            from jarvis.memory.database import db_write
+            await db_write(
+                "DELETE FROM sessions WHERE compressed=1 AND created_at < ?",
+                (cutoff,),
+            )
+        except Exception as e:
+            log.warning(f"Session pruning failed: {e}")
 
     async def _check_scheduled_notifications(self):
         """Send any due notifications via Telegram."""

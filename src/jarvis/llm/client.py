@@ -494,10 +494,22 @@ async def run_agent(
     total_duration = time.time() - start_ts
     cost = _get_model_cost(decision.model, total_input_tokens, total_output_tokens)
 
-    global _daily_cost_usd
+    global _daily_cost_usd, _daily_tokens
     _daily_cost_usd += cost
+    _daily_tokens += total_input_tokens + total_output_tokens
 
     metrics.record_llm_cost(decision.model, total_input_tokens, total_output_tokens)
+    metrics.llm_tokens_per_day.set(_daily_tokens)
+
+    # Persist to api_costs table for /cost endpoint
+    try:
+        from jarvis.memory.database import db_write as _db_write
+        await _db_write(
+            "INSERT INTO api_costs (model, input_tok, output_tok, cost_usd) VALUES (?,?,?,?)",
+            (decision.model, total_input_tokens, total_output_tokens, cost),
+        )
+    except Exception:
+        pass  # non-critical — never block on cost tracking
 
     usage_stats = {
         "model": decision.model,

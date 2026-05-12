@@ -74,13 +74,13 @@ SECRET_KEY = _load_or_create_secret()
 # ─── Middleware ───────────────────────────────────────────────────────────────
 
 class LimitBodySize(BaseHTTPMiddleware):
-    """v6 fix: prevent OOM from huge POST bodies."""
-    MAX_BODY = 1_000_000  # 1MB
+    """Prevent OOM from huge POST bodies — limit from config."""
 
     async def dispatch(self, request: Request, call_next):
+        max_body = get_config().server.max_body_size
         content_length = request.headers.get("content-length")
         try:
-            if content_length and int(content_length) > self.MAX_BODY:
+            if content_length and int(content_length) > max_body:
                 return Response("Request too large", status_code=413)
         except ValueError:
             return Response("Invalid Content-Length", status_code=400)

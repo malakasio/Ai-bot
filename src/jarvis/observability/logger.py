@@ -119,12 +119,14 @@ class AuditLogger:
         zone: str = "green",
     ) -> str:
         action_id = _next_action_id()
+        input_str = input_data if isinstance(input_data, (str, int, float, bool, type(None))) else str(input_data)
+        output_str = output if isinstance(output, (str, int, float, bool, type(None))) else str(output)[:500]
         record = {
             "action_id": action_id,
             "timestamp": datetime.now(USER_TZ).isoformat(),
             "tool": tool,
-            "input": input_data if isinstance(input_data, (str, int, float, bool, type(None))) else str(input_data),
-            "output": output if isinstance(output, (str, int, float, bool, type(None))) else str(output)[:500],
+            "input": input_str,
+            "output": output_str,
             "success": success,
             "duration_ms": round(duration_ms, 2),
             "score": score,
@@ -134,6 +136,26 @@ class AuditLogger:
             "zone": zone,
         }
         self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        # Mirror to action_log table in SQLite for queryability
+        try:
+            import asyncio
+            from jarvis.memory.database import db_write as _db_write
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(_db_write(
+                    """INSERT OR IGNORE INTO action_log
+                       (action_id, tool, input, output, success, duration_ms,
+                        score, model_used, tokens_used, affected, zone)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (action_id, tool, str(input_str)[:500], str(output_str)[:500],
+                     int(success), round(duration_ms, 2), score,
+                     model_used, tokens_used,
+                     json.dumps(affected or []), zone),
+                ))
+        except Exception:
+            pass  # audit logging is best-effort
+
         return action_id
 
     def close(self):

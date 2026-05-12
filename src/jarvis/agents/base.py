@@ -158,13 +158,17 @@ class BaseAgent:
 
         enriched_task = inject_time_context(task) + memory_context
 
-        # Create task record
+        # UPSERT task record — INSERT if new, UPDATE if KAIROS/worker already created it
         await db_write(
-            "INSERT INTO tasks (id, task_type, payload, status, agent_id) VALUES (?,?,?,?,?)",
+            """INSERT INTO tasks (id, task_type, payload, status, agent_id)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 status='running', agent_id=excluded.agent_id, started_at=unixepoch('now')""",
             (task_id, decision.task_type, task[:1000], "running", self.agent_id),
         )
 
-        task_state = TaskState(task_id=task_id, data={"task": task})
+        # Resume from checkpoint if available
+        task_state = await TaskState.load(task_id) or TaskState(task_id=task_id, data={"task": task})
         await task_state.save()
 
         last_error = None
@@ -182,6 +186,7 @@ class BaseAgent:
                     system=self._system_prompt,
                     decision=decision,
                     tool_executor=self._execute_tool,
+                    max_iterations=get_config().llm.max_iterations,
                 )
 
                 duration_ms = (time.time() - start_ts) * 1000

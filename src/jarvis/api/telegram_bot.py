@@ -361,6 +361,46 @@ async def start_telegram_bot():
         recent = "\n".join(lines[-n:])
         await send_safe(update.get_bot(), update.effective_chat.id, f"```\n{recent[-3000:]}\n```")
 
+    # ── /history ──────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_history(update, context):
+        """Show recent actions from the action_log table."""
+        from jarvis.memory.database import db_fetch_all
+        n = int(context.args[0]) if context.args else 10
+        rows = await db_fetch_all(
+            "SELECT tool, input, success, duration_ms, score FROM action_log "
+            "ORDER BY ts DESC LIMIT ?",
+            (n,),
+        )
+        if not rows:
+            await send_safe(update.get_bot(), update.effective_chat.id, "Δεν υπάρχουν actions ακόμα.")
+            return
+        lines = []
+        for r in rows:
+            ok = "✅" if r["success"] else "❌"
+            score_str = f" score={r['score']:.0f}" if r.get("score") else ""
+            lines.append(f"{ok} `{r['tool']}` {r['input'][:60]!r}{score_str} ({r['duration_ms']:.0f}ms)")
+        await send_safe(update.get_bot(), update.effective_chat.id, "\n".join(lines))
+
+    # ── /budget ───────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_budget(update, context):
+        """Show current token/cost budget status."""
+        from jarvis.llm.client import _daily_cost_usd, _daily_tokens
+        from jarvis.config import get_config
+        cfg = get_config()
+        budget_usd = cfg.llm.daily_token_budget * 0.000004
+        pct = (_daily_cost_usd / budget_usd * 100) if budget_usd else 0
+        msg = (
+            f"*Budget Today*\n"
+            f"💰 Spent: ${_daily_cost_usd:.4f} / ${budget_usd:.2f} ({pct:.1f}%)\n"
+            f"🔢 Tokens: {_daily_tokens:,}\n"
+            f"📊 Limit: {cfg.llm.daily_token_budget:,} tokens/day"
+        )
+        await send_safe(update.get_bot(), update.effective_chat.id, msg)
+
     # ── /stop ─────────────────────────────────────────────────────────────────
 
     @auth_required
@@ -407,7 +447,9 @@ async def start_telegram_bot():
 🧠 `/memory <αναζήτηση>` — αναζήτηση μνήμης
 📊 `/status` — κατάσταση συστήματος
 💰 `/cost` — κόστος API σήμερα
+📈 `/budget` — token budget & limits
 📋 `/logs` — τελευταία logs
+🕐 `/history [n]` — τελευταίες n actions
 🗑 `/clear` — καθάρισε session
 ⏸ `/stop` — παύση background tasks""")
 
@@ -524,6 +566,8 @@ async def start_telegram_bot():
     app.add_handler(CommandHandler("run", cmd_run))
     app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("cost", cmd_cost))
+    app.add_handler(CommandHandler("history", cmd_history))
+    app.add_handler(CommandHandler("budget", cmd_budget))
     app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("skill_proposals", cmd_skill_proposals))

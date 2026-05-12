@@ -159,8 +159,9 @@ async def db_writer_task():
             try:
                 req = await asyncio.wait_for(db_queue.get(), timeout=60.0)
             except asyncio.TimeoutError:
-                # Hourly WAL checkpoint — PASSIVE (safe with Litestream)
-                if time.time() - last_checkpoint > 3600:
+                # WAL checkpoint — interval from config (default 3600s)
+                interval = get_config().memory.wal_checkpoint_interval_s
+                if time.time() - last_checkpoint > interval:
                     try:
                         await db.execute("PRAGMA wal_checkpoint(PASSIVE)")
                         last_checkpoint = time.time()
