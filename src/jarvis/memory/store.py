@@ -234,9 +234,12 @@ async def search_memories(
         )
 
         vector_results: list[tuple[int, float, dict]] = []
+        query_dim = len(query_vec)
         for row in rows:
             if row["embedding"]:
                 mem_vec = unpack_embedding(row["embedding"])
+                if len(mem_vec) != query_dim:
+                    continue  # skip vectors from a different embedding provider
                 sim = cosine_similarity(query_vec, mem_vec)
                 if sim >= min_similarity:
                     vector_results.append((row["id"], sim, row))
@@ -417,8 +420,9 @@ async def run_auto_dream(llm_call_fn):
     """
     log.info("autoDream starting memory consolidation...")
 
-    # Fetch recent unconsolidated episodic memories — last 24h as per blueprint
-    cutoff = time.time() - 86400
+    # Fetch recent unconsolidated episodic memories — 7 days rolling window
+    # (24h would permanently miss memories if system is idle > 1 day)
+    cutoff = time.time() - 86400 * 7
     episodes = await db_fetch_all(
         """SELECT id, content, created_at FROM memories
            WHERE memory_type='episodic' AND consolidated=0 AND created_at > ?
