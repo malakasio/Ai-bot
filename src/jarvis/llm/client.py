@@ -193,7 +193,7 @@ async def _groq_call(
     payload: dict = {
         "model": model,
         "messages": groq_messages,
-        "max_tokens": min(max_tokens, 32768),
+        "max_tokens": min(max_tokens, 1024),  # keep output small to stay in TPM budget
         "temperature": 0.7,
     }
 

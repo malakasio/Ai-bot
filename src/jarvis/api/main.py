@@ -271,8 +271,8 @@ def create_app() -> FastAPI:
 
         # Inject prior turns so the agent has conversational context
         agent.prior_messages = [
-            {"role": m["role"], "content": m["content"]}
-            for m in history[-20:]
+            {"role": m["role"], "content": m["content"][:500]}
+            for m in history[-6:]
             if m["role"] in ("user", "assistant")
         ]
 

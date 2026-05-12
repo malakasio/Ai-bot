@@ -18,6 +18,21 @@ from typing import Any, Callable, Optional
 from jarvis.config import get_config
 from jarvis.llm.client import run_agent, simple_completion
 from jarvis.llm.router import route, TASK_TOOL_SETS
+
+_DEFAULT_SYSTEM_PROMPT = """\
+You are JARVIS, an autonomous AI assistant with memory, tools, and background processes.
+
+Core rules:
+- Use tools proactively when they would improve your answer
+- Save important information to memory (memory_save)
+- Search memory before answering factual questions about the user (memory_search)
+- Run code to verify calculations or process data (python_exec)
+- Browse the web for current information (web_browse, web_search)
+- Always respond in the same language as the user
+- Be direct and concise — no unnecessary preambles
+
+You remember previous conversations. The user's history is injected above.\
+"""
 from jarvis.memory.database import db_write, db_fetch_one
 from jarvis.memory.store import save_memory, load_procedural_memory, propose_skill_update
 from jarvis.observability.logger import get_logger, get_audit
@@ -91,16 +106,25 @@ class BaseAgent:
 
         if self._system_prompt is None:
             from pathlib import Path
-            claude_md = Path("CLAUDE.md")
-            self._system_prompt = claude_md.read_text() if claude_md.exists() else (
-                "You are JARVIS, an autonomous assistant. Be concise and direct."
-            )
+            from jarvis.config import JARVIS_HOME
 
-        # Load procedural memory (SKILL.md files)
+            # Priority: env var > JARVIS_HOME/system.md > default built-in
+            # CLAUDE.md is for AI agents working on the codebase, not user chat
+            import os
+            if os.environ.get("JARVIS_SYSTEM_PROMPT"):
+                self._system_prompt = os.environ["JARVIS_SYSTEM_PROMPT"]
+            else:
+                custom = JARVIS_HOME / "system.md"
+                self._system_prompt = custom.read_text().strip() if custom.exists() else _DEFAULT_SYSTEM_PROMPT
+
+        # Load top-3 most relevant SKILL.md rules (keep short to save tokens)
         self._skill_cache = load_procedural_memory()
         if self._skill_cache:
-            skill_text = "\n\n".join(f"## {name}\n{content}" for name, content in self._skill_cache.items())
-            self._system_prompt += f"\n\n# Loaded Skills\n{skill_text[:5000]}"
+            skill_text = "\n".join(
+                f"[{name}]: {content.split(chr(10))[0][:120]}"
+                for name, content in list(self._skill_cache.items())[:3]
+            )
+            self._system_prompt += f"\n\nActive skills: {skill_text}"
 
         self._initialized = True
         log.info(f"Agent {self.agent_id} initialized ({len(self._skill_cache)} skills loaded)")
@@ -154,7 +178,7 @@ class BaseAgent:
         memory_context = ""
         if memories:
             memory_items = "\n".join(f"- [{m['time_human']}] {m['content'][:200]}" for m in memories[:3])
-            memory_context = f"\n\nΣχετικές αναμνήσεις:\n{memory_items}"
+            memory_context = f"\n\nRelevant memories:\n{memory_items}"
 
         enriched_task = inject_time_context(task) + memory_context
 

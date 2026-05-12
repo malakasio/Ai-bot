@@ -105,8 +105,8 @@ async def _run_agent(text: str, session_id: str) -> str:
         agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
 
     agent.prior_messages = [
-        {"role": m["role"], "content": m["content"]}
-        for m in history[-20:]
+        {"role": m["role"], "content": m["content"][:500]}
+        for m in history[-6:]
         if m["role"] in ("user", "assistant")
     ]
 
