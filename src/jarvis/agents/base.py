@@ -194,24 +194,25 @@ class BaseAgent:
         else:
             active_tools = []  # pure conversation: no tools needed
 
-        # Get memory context
+        # Run memory search + task DB write in PARALLEL — not sequential
         from jarvis.memory.store import search_memories, inject_time_context
-        memories = await search_memories(task, top_k=5)
+
+        memories_task = asyncio.create_task(search_memories(task, top_k=5))
+        db_task = asyncio.create_task(db_write(
+            """INSERT INTO tasks (id, task_type, payload, status, agent_id)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 status='running', agent_id=excluded.agent_id, started_at=unixepoch('now')""",
+            (task_id, decision.task_type, task[:1000], "running", self.agent_id),
+        ))
+
+        memories, _ = await asyncio.gather(memories_task, db_task)
         memory_context = ""
         if memories:
             memory_items = "\n".join(f"- [{m['time_human']}] {m['content'][:200]}" for m in memories[:3])
             memory_context = f"\n\nRelevant memories:\n{memory_items}"
 
         enriched_task = inject_time_context(task) + memory_context
-
-        # UPSERT task record — INSERT if new, UPDATE if KAIROS/worker already created it
-        await db_write(
-            """INSERT INTO tasks (id, task_type, payload, status, agent_id)
-               VALUES (?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
-                 status='running', agent_id=excluded.agent_id, started_at=unixepoch('now')""",
-            (task_id, decision.task_type, task[:1000], "running", self.agent_id),
-        )
 
         # Resume from checkpoint if available
         task_state = await TaskState.load(task_id) or TaskState(task_id=task_id, data={"task": task})
@@ -247,23 +248,25 @@ class BaseAgent:
                 # Evaluate output quality
                 score = await self._evaluate_output(task, text, decision.task_type)
 
-                # Update task record
-                await db_write(
-                    "UPDATE tasks SET status='completed', result=?, score=?, finished_at=? WHERE id=?",
-                    (text[:5000], score, time.time(), task_id),
-                )
+                # Fire-and-forget post-task writes — don't block the response
+                async def _post_task():
+                    try:
+                        await db_write(
+                            "UPDATE tasks SET status='completed', result=?, score=?, finished_at=? WHERE id=?",
+                            (text[:5000], score, time.time(), task_id),
+                        )
+                        await save_memory(
+                            content=f"Task: {task[:200]}\nResult: {text[:300]}\nScore: {score}",
+                            memory_type="episodic",
+                            importance=min(1.0, score / 100),
+                            tags=[decision.task_type, self.agent_id],
+                        )
+                        if score < 70:
+                            await self._propose_improvement(task, text, score, decision.task_type)
+                    except Exception as e:
+                        log.warning(f"Post-task write failed: {e}")
 
-                # Save to episodic memory
-                await save_memory(
-                    content=f"Task: {task[:200]}\nResult: {text[:300]}\nScore: {score}",
-                    memory_type="episodic",
-                    importance=min(1.0, score / 100),
-                    tags=[decision.task_type, self.agent_id],
-                )
-
-                # Self-improvement: propose skill update if score < 70
-                if score < 70:
-                    await self._propose_improvement(task, text, score, decision.task_type)
+                asyncio.create_task(_post_task())
 
                 metrics.tasks_total.inc()
                 metrics.tasks_success.inc()

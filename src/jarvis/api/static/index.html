@@ -118,22 +118,40 @@ function addMessage(role, text) {
 async function sendMessage(text) {
   if (!text.trim()) return;
   addMessage('user', text);
-  const loadingEl = addMessage('system', '⏳ Σκέφτομαι...');
+
+  // Use streaming WebSocket for faster perceived response
+  const wsUrl = (location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/stream';
+  let ws;
+  let msgEl = null;
+  let answered = false;
+
   try {
-    const data = await api('/chat', {method:'POST', body: JSON.stringify({message: text, session_id: getSessionId()})});
-    loadingEl.remove();
-    if (data.response && data.response.trim()) {
-      addMessage('assistant', data.response);
-    } else if (data.error) {
-      const hint = data.error.includes('ClientConnector') || data.error.includes('RetryError')
-        ? '❌ Δεν βρέθηκε LLM. Πρόσθεσε **GROQ_API_KEY** στα Railway Variables και κάνε redeploy.'
-        : `❌ ${data.error}`;
-      addMessage('system', hint);
-    } else {
-      addMessage('system', '❌ Δεν ήρθε απάντηση. Ελέγξε ότι έχεις GROQ_API_KEY στα Railway Variables.');
-    }
+    ws = new WebSocket(wsUrl);
+    msgEl = addMessage('assistant', '▋');
+
+    ws.onopen = () => ws.send(JSON.stringify({message: text, session_id: getSessionId()}));
+
+    ws.onmessage = e => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'response' && msg.text) {
+        msgEl.innerHTML = msg.text.replace(/\n/g,'<br>');
+        answered = true;
+      }
+      if (msg.type === 'done') ws.close();
+    };
+
+    ws.onerror = ws.onclose = async () => {
+      if (!answered) {
+        // Fallback to REST
+        try {
+          const data = await api('/chat', {method:'POST', body: JSON.stringify({message: text, session_id: getSessionId()})});
+          if (data.response?.trim()) msgEl.innerHTML = data.response.replace(/\n/g,'<br>');
+          else { msgEl.remove(); addMessage('system', data.error ? `❌ ${data.error}` : '❌ Δεν ήρθε απάντηση. Έχεις GROQ_API_KEY;'); }
+        } catch(err) { msgEl.remove(); addMessage('system', `❌ ${err.message}`); }
+      }
+    };
   } catch(e) {
-    loadingEl.remove();
+    if (msgEl) msgEl.remove();
     addMessage('system', `❌ ${e.message}`);
   }
 }
