@@ -343,8 +343,12 @@ class BaseAgent:
 
         score = min(100.0, max(0.0, score))
 
-        # LLM micro-evaluation only when heuristic is borderline (35-75) and task matters
-        if 35 < score < 75 and task_type not in ("simple_qa", "voice", "notification"):
+        # LLM micro-evaluation — disabled by default to avoid double API call latency.
+        # Enable with JARVIS_EVAL_LLM=true (adds ~300ms per message).
+        import os
+        if (os.environ.get("JARVIS_EVAL_LLM") == "true"
+                and 35 < score < 75
+                and task_type not in ("simple_qa", "voice", "notification")):
             try:
                 from jarvis.llm.client import simple_completion
                 eval_prompt = (
@@ -357,10 +361,9 @@ class BaseAgent:
                 m = re.search(r"\b(\d{1,3})\b", rating_str)
                 if m:
                     llm_score = float(m.group(1))
-                    # Blend: heuristic 60% + LLM 40%
                     score = score * 0.6 + llm_score * 0.4
             except Exception:
-                pass  # LLM eval is best-effort
+                pass
 
         self._last_failure_modes = detected_modes
         return min(100.0, max(0.0, score))

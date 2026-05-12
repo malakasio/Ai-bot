@@ -255,19 +255,29 @@ def create_app() -> FastAPI:
 
         from jarvis.agents.orchestrator import CoordinatorAgent
         from jarvis.llm.router import classify_task_by_keywords
+        from jarvis.api.telegram_bot import _get_cached_agent, _agent_cache
 
         tool_defs, handlers = get_tools_for_set([])
 
-        # Use coordinator for complex tasks, base agent for simple ones
         task_type = classify_task_by_keywords(message)
-        if task_type in ("architecture", "deep_debug", "critical", "code_generation", "analysis"):
-            agent = CoordinatorAgent()
-            await agent.initialize()
-        else:
-            agent = BaseAgent(agent_id=f"api_{session_id[:8]}")
+        is_complex = task_type in ("architecture", "deep_debug", "critical", "code_generation", "analysis")
 
-        for td in tool_defs:
-            agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
+        agent = _get_cached_agent(f"web_{session_id}")
+        if agent is None or is_complex:
+            if is_complex:
+                agent = CoordinatorAgent()
+            else:
+                agent = BaseAgent(agent_id=f"api_{session_id[:8]}")
+            await agent.initialize()
+            for td in tool_defs:
+                agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
+            if not is_complex:
+                _agent_cache[f"web_{session_id}"] = (agent, time.time())
+        else:
+            # Re-register tools in case they changed (rare but safe)
+            for td in tool_defs:
+                if td["name"] not in agent._tool_handlers:
+                    agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
 
         # Inject prior turns so the agent has conversational context
         agent.prior_messages = [

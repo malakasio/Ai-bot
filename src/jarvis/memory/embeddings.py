@@ -120,7 +120,7 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
             "https://api.jina.ai/v1/embeddings",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"input": texts, "model": _model_name},
-            timeout=30,
+            timeout=10,  # fail fast — fallback to FTS if slow
         )
         resp.raise_for_status()
         data = resp.json()

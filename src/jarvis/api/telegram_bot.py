@@ -95,6 +95,26 @@ async def _tts_bytes(text: str) -> bytes | None:
         return None
 
 
+
+# Per-session agent cache — avoids re-initialization on every message
+_agent_cache: dict[str, tuple[object, float]] = {}  # session_id → (agent, last_used_ts)
+_AGENT_CACHE_TTL = 1800  # 30 minutes
+
+
+def _get_cached_agent(session_id: str):
+    """Return cached agent or None if expired/missing."""
+    now = time.time()
+    # Evict stale entries
+    stale = [k for k, (_, ts) in _agent_cache.items() if now - ts > _AGENT_CACHE_TTL]
+    for k in stale:
+        del _agent_cache[k]
+    entry = _agent_cache.get(session_id)
+    if entry:
+        _agent_cache[session_id] = (entry[0], now)  # refresh TTL
+        return entry[0]
+    return None
+
+
 async def _run_agent(text: str, session_id: str) -> str:
     """Run the full agent with session memory and all tools."""
     from jarvis.agents.base import BaseAgent
@@ -110,14 +130,20 @@ async def _run_agent(text: str, session_id: str) -> str:
     tool_defs, handlers = get_tools_for_set([])
 
     task_type = classify_task_by_keywords(text)
-    if task_type in ("architecture", "deep_debug", "critical", "code_generation", "analysis"):
-        agent = CoordinatorAgent()
-        await agent.initialize()
-    else:
-        agent = BaseAgent(agent_id=f"tg_{session_id[-8:]}")
+    is_complex = task_type in ("architecture", "deep_debug", "critical", "code_generation", "analysis")
 
-    for td in tool_defs:
-        agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
+    # Reuse cached agent to skip re-initialization overhead
+    agent = _get_cached_agent(session_id)
+    if agent is None or is_complex:
+        if is_complex:
+            agent = CoordinatorAgent()
+        else:
+            agent = BaseAgent(agent_id=f"tg_{session_id[-8:]}")
+        await agent.initialize()
+        for td in tool_defs:
+            agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
+        if not is_complex:
+            _agent_cache[session_id] = (agent, time.time())
 
     agent.prior_messages = [
         {"role": m["role"], "content": m["content"][:500]}
