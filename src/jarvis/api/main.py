@@ -210,17 +210,28 @@ def create_app() -> FastAPI:
     async def config_check():
         """Shows which services are configured (no secrets exposed)."""
         cfg = get_config()
+        from jarvis.llm.router import select_model
+        active = select_model("simple_qa")
+        active_heavy = select_model("architecture")
         return {
             "llm": {
-                "groq": cfg.llm.has_groq,
                 "anthropic": cfg.llm.has_anthropic,
+                "groq": cfg.llm.has_groq,
                 "openai": cfg.llm.has_openai,
-                "ollama_url": cfg.llm.ollama_base_url,
+                "active_fast_model": active.model,
+                "active_fast_provider": active.provider,
+                "active_heavy_model": active_heavy.model,
+                "active_heavy_provider": active_heavy.provider,
+                "haiku": cfg.llm.haiku_model,
+                "sonnet": cfg.llm.sonnet_model,
+                "opus": cfg.llm.opus_model,
             },
+            "embeddings": cfg.memory.embed_provider,
             "telegram": cfg.telegram.enabled,
             "jarvis_home": str(cfg.memory.db_path.parent),
             "zone": cfg.security.zone,
             "kairos_enabled": cfg.kairos.enabled,
+            "lab_mode": cfg.security.lab_mode,
         }
 
     @app.get("/metrics", response_class=PlainTextResponse)

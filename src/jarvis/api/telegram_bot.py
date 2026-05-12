@@ -550,29 +550,52 @@ async def start_telegram_bot():
 
     @auth_required
     async def handle_photo(update, context):
-        """Photo → describe + run agent."""
+        """Photo → Claude Vision (if available) or describe + run agent."""
         chat_id = update.effective_chat.id
         await _typing(update.get_bot(), chat_id)
 
         caption = update.message.caption or "Περίγραψε αυτή την εικόνα λεπτομερώς."
-
-        # Download highest-res photo
         photo = update.message.photo[-1]
+
         try:
             file = await context.bot.get_file(photo.file_id)
             photo_bytes = await file.download_as_bytearray()
-            # Encode as base64 for vision-capable models
-            import base64
-            b64 = base64.b64encode(photo_bytes).decode()
-            # Build a text prompt describing we have an image
-            prompt = (
-                f"{caption}\n\n"
-                f"[Επισυνάφθηκε εικόνα {photo.width}x{photo.height}px — "
-                f"base64 διαθέσιμο αλλά χωρίς vision model χρησιμοποιώ caption: {caption}]"
-            )
-        except Exception as e:
-            prompt = caption
+        except Exception:
+            photo_bytes = None
 
+        cfg = get_config()
+        if photo_bytes and cfg.llm.has_anthropic:
+            # Claude Vision: send image directly to Claude API
+            try:
+                import base64
+                from anthropic import AsyncAnthropic
+                client = AsyncAnthropic(api_key=cfg.llm.anthropic_api_key)
+                b64 = base64.b64encode(photo_bytes).decode()
+                response_obj = await client.messages.create(
+                    model=cfg.llm.haiku_model,
+                    max_tokens=1024,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
+                            {"type": "text", "text": caption},
+                        ],
+                    }],
+                )
+                vision_response = response_obj.content[0].text
+                await send_safe(update.get_bot(), chat_id, vision_response)
+                session_id = f"telegram_{chat_id}"
+                from jarvis.memory.store import save_session_message
+                await save_session_message(session_id, "user", f"[Image] {caption}")
+                await save_session_message(session_id, "assistant", vision_response)
+                return
+            except Exception as e:
+                log.warning(f"Claude Vision failed, falling back: {e}")
+
+        # Fallback: text description
+        prompt = caption if not photo_bytes else (
+            f"{caption}\n[Image {photo.width}x{photo.height}px received]"
+        )
         session_id = f"telegram_{chat_id}"
         response = await _run_agent(prompt, session_id)
         await send_safe(update.get_bot(), chat_id, response)

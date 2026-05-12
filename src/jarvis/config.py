@@ -67,16 +67,16 @@ class LLMConfig:
     openai_api_key: str = field(default_factory=lambda: _read_credential("openai_key", "OPENAI_API_KEY"))
     gemini_api_key: str = field(default_factory=lambda: _read_credential("gemini_key", "GEMINI_API_KEY"))
 
-    # Model names when using paid APIs
-    haiku_model: str = "claude-haiku-4-5-20251001"
-    sonnet_model: str = "claude-sonnet-4-5-20251001"
-    opus_model: str = "claude-opus-4-5-20251001"
+    # Current Claude model IDs (May 2026)
+    haiku_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_HAIKU_MODEL", "claude-haiku-4-5-20251001"))
+    sonnet_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_SONNET_MODEL", "claude-sonnet-4-6"))
+    opus_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_OPUS_MODEL", "claude-opus-4-7"))
     gpt_fallback: str = "gpt-4o-mini"
     gemini_fallback: str = "gemini/gemini-1.5-flash"
 
-    # Limits
-    max_tokens_fast: int = 8192
-    max_tokens_analysis: int = 8192
+    # Token limits — Claude supports up to 128k output, we use 8192 as practical max
+    max_tokens_fast: int = int(os.environ.get("MAX_TOKENS_FAST", "8192"))
+    max_tokens_analysis: int = int(os.environ.get("MAX_TOKENS_ANALYSIS", "16384"))
     daily_token_budget: int = int(os.environ.get("DAILY_TOKEN_BUDGET", "500000"))
     max_iterations: int = 20
 

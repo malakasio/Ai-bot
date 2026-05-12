@@ -169,15 +169,34 @@ def select_model(task_type: TaskType) -> RoutingDecision:
             expected_tokens=expected_tokens,
         )
 
-    # With paid APIs available — route intelligently
-    if task_type in ("simple_qa", "voice", "notification", "monitoring", "embedding"):
-        if cfg.llm.has_anthropic:
+    # Claude routing (blueprint §9 model routing table)
+    if cfg.llm.has_anthropic:
+        # Haiku 4.5: fast tasks — voice, notifications, simple QA, monitoring
+        if task_type in ("simple_qa", "voice", "notification", "monitoring", "embedding", "summarization"):
             return RoutingDecision(
                 task_type=task_type, tier="paid_fast",
                 model=cfg.llm.haiku_model, provider="anthropic",
-                reason="fast paid model for simple task",
+                reason="Claude Haiku: fast + cheap for simple tasks",
                 expected_tokens=expected_tokens,
             )
+        # Sonnet 4.6: balanced — code, analysis, system management
+        if task_type in ("code_review", "code_generation", "analysis", "system_mgmt"):
+            return RoutingDecision(
+                task_type=task_type, tier="paid_smart",
+                model=cfg.llm.sonnet_model, provider="anthropic",
+                reason="Claude Sonnet: best speed/intelligence for code & analysis",
+                expected_tokens=expected_tokens,
+            )
+        # Opus 4.7: most capable — architecture, deep debugging, critical, lab
+        return RoutingDecision(
+            task_type=task_type, tier="paid_heavy",
+            model=cfg.llm.opus_model, provider="anthropic",
+            reason="Claude Opus: maximum capability for complex tasks",
+            expected_tokens=expected_tokens,
+        )
+
+    # Groq / Ollama fallback when no Anthropic key
+    if task_type in ("simple_qa", "voice", "notification", "monitoring", "embedding"):
         return RoutingDecision(
             task_type=task_type, tier="local_fast",
             model=cfg.llm.ollama_fast_model, provider="ollama",
@@ -186,13 +205,6 @@ def select_model(task_type: TaskType) -> RoutingDecision:
         )
 
     if task_type in ("code_review", "analysis", "system_mgmt", "summarization", "code_generation"):
-        if cfg.llm.has_anthropic:
-            return RoutingDecision(
-                task_type=task_type, tier="paid_smart",
-                model=cfg.llm.sonnet_model, provider="anthropic",
-                reason="smart paid model for analysis/code",
-                expected_tokens=expected_tokens,
-            )
         return RoutingDecision(
             task_type=task_type, tier="local_smart",
             model=cfg.llm.ollama_smart_model, provider="ollama",
@@ -201,17 +213,10 @@ def select_model(task_type: TaskType) -> RoutingDecision:
         )
 
     if task_type in ("architecture", "deep_debug", "critical", "lab"):
-        if cfg.llm.has_anthropic:
-            return RoutingDecision(
-                task_type=task_type, tier="paid_heavy",
-                model=cfg.llm.opus_model, provider="anthropic",
-                reason="heavy paid model for complex task",
-                expected_tokens=expected_tokens,
-            )
         return RoutingDecision(
             task_type=task_type, tier="local_smart",
             model=cfg.llm.ollama_smart_model, provider="ollama",
-            reason="local smart model (no heavy paid available)",
+            reason="local smart model (no Claude key)",
             expected_tokens=expected_tokens,
         )
 

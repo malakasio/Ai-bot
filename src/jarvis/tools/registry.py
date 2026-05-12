@@ -416,4 +416,8 @@ def get_tools_for_set(tool_set: list[str]) -> tuple[list[dict], dict]:
             })
             handlers[name] = spec["handler"]
 
-    return tool_defs[:10], handlers
+    # No tool cap for Anthropic (Claude handles many tools natively)
+    # Cap only for smaller models (Groq/Ollama) where tool count hurts quality
+    from jarvis.config import get_config as _gc
+    cap = 20 if _gc().llm.has_anthropic else 10
+    return tool_defs[:cap], handlers
