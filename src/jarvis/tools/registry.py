@@ -144,6 +144,54 @@ async def tool_get_status() -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
+async def tool_web_browse(url: str) -> str:
+    """Fetch a webpage and return its readable text content."""
+    import httpx, re
+    if _is_ssrf_url(url) and not get_config().security.lab_mode:
+        return "[BLOCKED: private/metadata URL]"
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0"}) as c:
+            r = await c.get(url)
+            html = r.text
+        # Strip tags, compress whitespace
+        text = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.S)
+        text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.S)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:8000] or "[empty page]"
+    except Exception as e:
+        return f"[Browse error: {e}]"
+
+
+async def tool_python_exec(code: str) -> str:
+    """
+    Execute Python code in a subprocess sandbox (5s timeout).
+    No network, no file writes outside /tmp. Returns stdout+stderr.
+    """
+    import subprocess, tempfile, sys
+    cfg = get_config()
+    # Only allow in green zone or lab mode
+    if not cfg.security.lab_mode and cfg.security.zone not in ("standard", "lab"):
+        return "[BLOCKED: python_exec requires standard or lab zone]"
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+        f.write(code)
+        fname = f.name
+    try:
+        result = subprocess.run(
+            [sys.executable, fname],
+            capture_output=True, text=True, timeout=5,
+        )
+        out = (result.stdout or "") + (result.stderr or "")
+        return out[:5000] or "(no output)"
+    except subprocess.TimeoutExpired:
+        return "[TIMEOUT: code ran > 5s]"
+    except Exception as e:
+        return f"[Exec error: {e}]"
+    finally:
+        import os; os.unlink(fname)
+
+
 # ─── Lab Tools (JARVIS_LAB_MODE=true only) ───────────────────────────────────
 
 async def tool_network_scan(target: str, scan_type: str = "ping") -> str:
@@ -323,6 +371,24 @@ ALL_TOOLS: dict[str, dict] = {
         },
         "handler": tool_http_request,
     },
+    "web_browse": {
+        "description": "Fetch a webpage and return its readable text content. Use for reading articles, documentation, or any web page.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "Full URL to fetch"}},
+            "required": ["url"],
+        },
+        "handler": tool_web_browse,
+    },
+    "python_exec": {
+        "description": "Execute Python code and return stdout/stderr. Use for calculations, data processing, or anything that needs code.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"code": {"type": "string", "description": "Python code to execute"}},
+            "required": ["code"],
+        },
+        "handler": tool_python_exec,
+    },
 }
 
 
@@ -350,5 +416,4 @@ def get_tools_for_set(tool_set: list[str]) -> tuple[list[dict], dict]:
             })
             handlers[name] = spec["handler"]
 
-    # v4 fix: max 5 tools per context
-    return tool_defs[:5], handlers
+    return tool_defs[:10], handlers

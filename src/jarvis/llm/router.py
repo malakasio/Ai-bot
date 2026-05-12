@@ -75,19 +75,19 @@ EXPECTED_OUTPUT_TOKENS: dict[TaskType, int] = {
 
 # Tool sets per task type — names must match keys in tools/registry.py ALL_TOOLS
 TASK_TOOL_SETS: dict[TaskType, list[str]] = {
-    "code_review":      ["read_file", "write_file", "list_dir", "bash", "web_search"],
-    "code_generation":  ["read_file", "write_file", "list_dir", "bash"],
+    "code_review":      ["read_file", "write_file", "list_dir", "bash", "python_exec", "web_search"],
+    "code_generation":  ["read_file", "write_file", "list_dir", "bash", "python_exec"],
     "system_mgmt":      ["read_file", "write_file", "list_dir", "bash", "get_status"],
     "monitoring":       ["read_file", "list_dir", "bash", "get_status"],
-    "analysis":         ["read_file", "list_dir", "web_search", "memory_search"],
-    "simple_qa":        ["web_search", "memory_search", "get_status"],
+    "analysis":         ["web_browse", "web_search", "python_exec", "memory_search", "read_file"],
+    "simple_qa":        ["web_search", "web_browse", "memory_search", "python_exec", "get_status"],
     "voice":            [],
     "notification":     [],
-    "architecture":     ["read_file", "list_dir", "web_search"],
-    "deep_debug":       ["read_file", "write_file", "list_dir", "bash"],
-    "critical":         ["read_file", "write_file", "list_dir", "bash"],
-    "lab":              ["network_scan", "http_request", "read_file", "bash"],
-    "summarization":    ["read_file", "list_dir", "memory_search"],
+    "architecture":     ["read_file", "list_dir", "web_search", "web_browse"],
+    "deep_debug":       ["read_file", "write_file", "list_dir", "bash", "python_exec"],
+    "critical":         ["read_file", "write_file", "list_dir", "bash", "python_exec"],
+    "lab":              ["network_scan", "http_request", "web_browse", "read_file", "bash"],
+    "summarization":    ["web_browse", "read_file", "list_dir", "memory_search"],
     "embedding":        [],
 }
 

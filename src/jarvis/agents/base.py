@@ -82,6 +82,7 @@ class BaseAgent:
         self._tool_handlers: dict[str, Callable] = {}
         self._skill_cache: dict[str, str] = {}
         self._initialized = False
+        self.prior_messages: list[dict] = []  # injected session history
 
     async def initialize(self):
         """Load system prompt and skills."""
@@ -173,7 +174,7 @@ class BaseAgent:
                 if decision.task_type in ("code_generation", "system_mgmt", "architecture"):
                     await create_rollback_point(f"pre-task-{task_id[:8]}")
 
-                messages = [{"role": "user", "content": enriched_task}]
+                messages = self.prior_messages + [{"role": "user", "content": enriched_task}]
 
                 text, usage = await run_agent(
                     messages=messages,

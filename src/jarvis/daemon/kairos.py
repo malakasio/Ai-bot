@@ -83,21 +83,22 @@ class KAIROSDaemon:
         self._last_dream_time = time.time()
         self._last_activity = time.time()
         self._config_reload_task: Optional[asyncio.Task] = None
+        self._owns_db: bool = True  # False when embedded in FastAPI
 
-    async def start(self):
+    async def start(self, start_db: bool = True):
         """
         Start the KAIROS daemon.
-        Notifies systemd READY=1 BEFORE heavy initialization.
+        start_db=False when running inside the FastAPI process (DB writer
+        already started by the lifespan handler — don't start a second one).
         """
         log.info("KAIROS daemon starting...")
 
-        # Start DB writer FIRST
-        from jarvis.memory.database import supervised_db_writer
-        db_task = asyncio.create_task(supervised_db_writer(), name="db_writer")
-        self._tasks.append(db_task)
+        self._owns_db = start_db
+        if start_db:
+            from jarvis.memory.database import supervised_db_writer
+            db_task = asyncio.create_task(supervised_db_writer(), name="db_writer")
+            self._tasks.append(db_task)
 
-        # Notify systemd we're ready (before heavy init)
-        # v6 fix: sd_notify BEFORE spaCy/Alembic init
         sd_notify_ready()
 
         # Now do heavy initialization (after READY=1)
@@ -216,7 +217,7 @@ class KAIROSDaemon:
         from jarvis.tools.registry import get_tools_for_set
 
         pending = await db_fetch_all(
-            "SELECT * FROM tasks WHERE status='pending' AND priority >= 4 ORDER BY created_at LIMIT 5"
+            "SELECT * FROM tasks WHERE status='pending' ORDER BY priority ASC, created_at ASC LIMIT 5"
         )
 
         for task_row in pending:
@@ -382,9 +383,10 @@ class KAIROSDaemon:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
-        # Close DB (send poison pill)
-        from jarvis.memory.database import shutdown_db
-        await shutdown_db()
+        # Close DB only if we own the writer
+        if self._owns_db:
+            from jarvis.memory.database import shutdown_db
+            await shutdown_db()
 
         log.info("KAIROS shutdown complete")
 

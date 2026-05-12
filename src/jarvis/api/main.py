@@ -106,6 +106,7 @@ def rate_limit(key: str, max_requests: int = 60, window_s: int = 60) -> bool:
 
 _telegram_task: asyncio.Task | None = None
 _db_task: asyncio.Task | None = None
+_kairos_daemon = None
 
 
 @asynccontextmanager
@@ -118,8 +119,19 @@ async def _lifespan(app: FastAPI):
     _db_task = asyncio.create_task(supervised_db_writer(), name="db_writer")
     log.info("DB writer started")
 
-    # ── Telegram bot (optional)
+    # ── KAIROS autonomous daemon
+    global _kairos_daemon
     cfg = get_config()
+    if cfg.kairos.enabled:
+        try:
+            from jarvis.daemon.kairos import KAIROSDaemon
+            _kairos_daemon = KAIROSDaemon()
+            await _kairos_daemon.start(start_db=False)  # DB already running
+            log.info("KAIROS daemon started")
+        except Exception as e:
+            log.error(f"KAIROS failed to start: {e}")
+
+    # ── Telegram bot (optional)
     if cfg.telegram.enabled:
         log.info("Telegram bot enabled — starting in background")
         try:
@@ -142,6 +154,9 @@ async def _lifespan(app: FastAPI):
             await _telegram_task
         except asyncio.CancelledError:
             pass
+
+    if _kairos_daemon:
+        await _kairos_daemon.graceful_shutdown()
 
     await shutdown_db()
     if _db_task and not _db_task.done():
@@ -203,6 +218,7 @@ def create_app() -> FastAPI:
 
     @app.post("/chat")
     async def chat(request: Request):
+        import jarvis.daemon.kairos as _kairos_mod
         body = await request.json()
         message = body.get("message", "")
         session_id = body.get("session_id", str(uuid.uuid4()))
@@ -210,15 +226,50 @@ def create_app() -> FastAPI:
         if not message:
             raise HTTPException(400, "message required")
 
+        # Update activity time so autoDream idle signal works correctly
+        _kairos_mod._last_activity_time = time.time()
+
         from jarvis.agents.base import BaseAgent
         from jarvis.tools.registry import get_tools_for_set
+        from jarvis.memory.store import save_session_message, load_session_messages
 
-        agent = BaseAgent(agent_id=f"api_{session_id[:8]}")
+        # Load L2 session history (multi-turn memory)
+        history = await load_session_messages(session_id)
+
+        from jarvis.agents.orchestrator import CoordinatorAgent
+        from jarvis.llm.router import classify_task_by_keywords
+
         tool_defs, handlers = get_tools_for_set([])
+
+        # Use coordinator for complex tasks, base agent for simple ones
+        task_type = classify_task_by_keywords(message)
+        if task_type in ("architecture", "deep_debug", "critical", "code_generation", "analysis"):
+            agent = CoordinatorAgent()
+            await agent.initialize()
+        else:
+            agent = BaseAgent(agent_id=f"api_{session_id[:8]}")
+
         for td in tool_defs:
             agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
 
-        result = await agent.run_task(message)
+        # Inject prior turns so the agent has conversational context
+        agent.prior_messages = [
+            {"role": m["role"], "content": m["content"]}
+            for m in history[-20:]
+            if m["role"] in ("user", "assistant")
+        ]
+
+        # Save user message to L2
+        await save_session_message(session_id, "user", message)
+
+        if isinstance(agent, CoordinatorAgent):
+            result = await agent.run_orchestrated(message)
+        else:
+            result = await agent.run_task(message)
+
+        # Save assistant reply to L2
+        if result.output:
+            await save_session_message(session_id, "assistant", result.output)
 
         return {
             "session_id": session_id,
