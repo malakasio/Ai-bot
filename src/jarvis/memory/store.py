@@ -163,7 +163,7 @@ async def save_memory(
     if cfg.security.pii_detection:
         try:
             from jarvis.security.zones import sanitize_pii
-            content = sanitize_pii(content)
+            content, _ = sanitize_pii(content)  # returns (cleaned_text, mapping)
         except Exception:
             pass  # PII stripping is best-effort
 
