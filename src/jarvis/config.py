@@ -57,6 +57,11 @@ class LLMConfig:
     ollama_smart_model: str = field(default_factory=lambda: os.environ.get("OLLAMA_SMART_MODEL", "mistral:7b"))
     ollama_embed_model: str = field(default_factory=lambda: os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
 
+    # ── FREE CLOUD (Groq — free API, no credit card) ──
+    groq_api_key: str = field(default_factory=lambda: _read_credential("groq_key", "GROQ_API_KEY"))
+    groq_fast_model: str = field(default_factory=lambda: os.environ.get("GROQ_FAST_MODEL", "llama-3.2-3b-preview"))
+    groq_smart_model: str = field(default_factory=lambda: os.environ.get("GROQ_SMART_MODEL", "llama-3.3-70b-versatile"))
+
     # ── OPTIONAL PAID (set to use) ──
     anthropic_api_key: str = field(default_factory=lambda: _read_credential("anthropic_key", "ANTHROPIC_API_KEY"))
     openai_api_key: str = field(default_factory=lambda: _read_credential("openai_key", "OPENAI_API_KEY"))
@@ -76,6 +81,10 @@ class LLMConfig:
     max_iterations: int = 20
 
     @property
+    def has_groq(self) -> bool:
+        return bool(self.groq_api_key)
+
+    @property
     def has_anthropic(self) -> bool:
         return bool(self.anthropic_api_key)
 
@@ -86,6 +95,10 @@ class LLMConfig:
     @property
     def has_any_paid(self) -> bool:
         return self.has_anthropic or self.has_openai or bool(self.gemini_api_key)
+
+    @property
+    def has_any_cloud(self) -> bool:
+        return self.has_groq or self.has_any_paid
 
 
 @dataclass

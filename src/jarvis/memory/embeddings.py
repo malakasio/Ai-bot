@@ -37,24 +37,34 @@ def _load_model():
     provider = cfg.memory.embed_provider
 
     if provider == "sentence-transformers":
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(cfg.memory.embed_model)
-        _embed_dim = cfg.memory.embed_dim
-        _model_name = cfg.memory.embed_model
-        log.info(f"Loaded sentence-transformers model: {_model_name} ({_embed_dim}d)")
+        try:
+            from sentence_transformers import SentenceTransformer
+            _model = SentenceTransformer(cfg.memory.embed_model)
+            _embed_dim = cfg.memory.embed_dim
+            _model_name = cfg.memory.embed_model
+            log.info(f"Loaded sentence-transformers model: {_model_name} ({_embed_dim}d)")
+        except ImportError:
+            log.warning("sentence-transformers not installed, falling back to dummy embeddings (FTS5 keyword search still works)")
+            _model = "dummy"
+            _model_name = "dummy"
+            _embed_dim = cfg.memory.embed_dim
 
     elif provider == "ollama":
         import httpx
         _model = cfg.llm.ollama_embed_model
         _model_name = _model
-        # Determine dim via test embedding
-        resp = httpx.post(
-            f"{cfg.llm.ollama_base_url}/api/embeddings",
-            json={"model": _model, "prompt": "test"},
-            timeout=30,
-        )
-        _embed_dim = len(resp.json()["embedding"])
-        log.info(f"Loaded Ollama embedding model: {_model_name} ({_embed_dim}d)")
+        try:
+            resp = httpx.post(
+                f"{cfg.llm.ollama_base_url}/api/embeddings",
+                json={"model": _model, "prompt": "test"},
+                timeout=30,
+            )
+            _embed_dim = len(resp.json()["embedding"])
+            log.info(f"Loaded Ollama embedding model: {_model_name} ({_embed_dim}d)")
+        except Exception:
+            log.warning("Ollama embeddings unavailable, falling back to dummy embeddings")
+            _model = "dummy"
+            _model_name = "dummy"
 
     elif provider == "openai":
         import openai
@@ -64,7 +74,9 @@ def _load_model():
         log.info(f"Using OpenAI embeddings: {_model_name}")
 
     else:
-        raise ValueError(f"Unknown embed_provider: {provider}")
+        log.warning(f"Unknown embed_provider: {provider}, using dummy embeddings")
+        _model = "dummy"
+        _model_name = "dummy"
 
 
 async def ensure_model_loaded():
@@ -78,6 +90,10 @@ async def ensure_model_loaded():
 def _embed_sync(texts: list[str]) -> list[list[float]]:
     """Synchronous embedding — runs in executor."""
     cfg = get_config()
+
+    if _model == "dummy" or _model is None:
+        return [[0.0] * _embed_dim for _ in texts]
+
     provider = cfg.memory.embed_provider
 
     if provider == "sentence-transformers":

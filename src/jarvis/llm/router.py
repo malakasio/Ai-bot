@@ -137,8 +137,24 @@ def select_model(task_type: TaskType) -> RoutingDecision:
 
     expected_tokens = EXPECTED_OUTPUT_TOKENS.get(task_type, 1024)
 
-    # If no paid API available — use local Ollama for everything
-    if not cfg.llm.has_any_paid:
+    # Groq (FREE cloud) — use when available and no paid API
+    if cfg.llm.has_groq and not cfg.llm.has_any_paid:
+        if task_type in ("architecture", "deep_debug", "critical", "code_review", "code_generation", "analysis"):
+            return RoutingDecision(
+                task_type=task_type, tier="local_smart",
+                model=cfg.llm.groq_smart_model, provider="groq",
+                reason="free Groq cloud, smart model",
+                expected_tokens=expected_tokens,
+            )
+        return RoutingDecision(
+            task_type=task_type, tier="local_fast",
+            model=cfg.llm.groq_fast_model, provider="groq",
+            reason="free Groq cloud, fast model",
+            expected_tokens=expected_tokens,
+        )
+
+    # If no paid API and no Groq — use local Ollama for everything
+    if not cfg.llm.has_any_paid and not cfg.llm.has_groq:
         if task_type in ("architecture", "deep_debug", "critical"):
             return RoutingDecision(
                 task_type=task_type, tier="local_smart",
