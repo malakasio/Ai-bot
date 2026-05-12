@@ -184,6 +184,10 @@ async def db_writer_task():
                     cursor = await db.execute(req.sql, req.params)
                     row = await cursor.fetchone()
                     req.future.set_result(dict(row) if row else None)
+                elif req.fetch_mode == "rowcount":
+                    cursor = await db.execute(req.sql, req.params)
+                    await db.commit()
+                    req.future.set_result(cursor.rowcount)
                 else:
                     cursor = await db.execute(req.sql, req.params)
                     await db.commit()
@@ -228,6 +232,14 @@ async def db_write(sql: str, params: tuple = ()) -> int:
     await _db_ready.wait()
     future: asyncio.Future = asyncio.get_running_loop().create_future()
     await db_queue.put(DBRequest(sql, params, future, "none"))
+    return await future
+
+
+async def db_write_rowcount(sql: str, params: tuple = ()) -> int:
+    """Execute a write. Returns rowcount (rows actually affected)."""
+    await _db_ready.wait()
+    future: asyncio.Future = asyncio.get_running_loop().create_future()
+    await db_queue.put(DBRequest(sql, params, future, "rowcount"))
     return await future
 
 

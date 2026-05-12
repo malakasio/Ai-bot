@@ -285,13 +285,13 @@ def create_app() -> FastAPI:
             else:
                 result = await agent.run_task(message)
         except Exception as e:
-            import traceback
+            log.error(f"Chat handler error: {e}", exc_info=True)
             return {
                 "session_id": session_id,
                 "response": "",
                 "score": 0.0,
                 "success": False,
-                "error": f"EXCEPTION: {e}\n{traceback.format_exc()[-800:]}",
+                "error": str(e),
             }
 
         # Save assistant reply to L2

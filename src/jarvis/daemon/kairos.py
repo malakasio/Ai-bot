@@ -236,13 +236,15 @@ class KAIROSDaemon:
             if not _accepting_tasks:
                 break
             try:
-                # Claim the task atomically before processing
-                from jarvis.memory.database import db_write as _dw
-                await _dw(
+                # Claim the task — skip if another process already claimed it
+                from jarvis.memory.database import db_write_rowcount
+                claimed = await db_write_rowcount(
                     "UPDATE tasks SET status='running', started_at=unixepoch('now'), agent_id=? "
                     "WHERE id=? AND status='pending'",
                     ("kairos_worker", task_row["id"]),
                 )
+                if not claimed:
+                    continue  # another poller got it first
 
                 payload = json.loads(task_row["payload"])
                 task_text = payload.get("text", str(payload))
@@ -373,7 +375,9 @@ class KAIROSDaemon:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 data = await resp.json()
-                return data[0]["sha"] if data else ""
+                if resp.status != 200 or not isinstance(data, list) or not data:
+                    return ""
+                return data[0]["sha"]
 
     async def _health_loop(self):
         """System health check every 60 seconds."""
