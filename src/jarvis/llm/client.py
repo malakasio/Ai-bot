@@ -212,17 +212,27 @@ async def _groq_call(
         payload["tools"] = openai_tools
 
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg.llm.groq_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Groq error {resp.status_code}: {resp.text}")
-        return resp.json()
+        for attempt in range(3):
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {cfg.llm.groq_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            if resp.status_code == 429:
+                # Parse retry-after from error message or use default
+                import re
+                wait_match = re.search(r"try again in (\d+\.?\d*)s", resp.text)
+                wait = float(wait_match.group(1)) + 0.5 if wait_match else 5.0
+                log.warning(f"Groq rate limit, waiting {wait:.1f}s (attempt {attempt+1}/3)")
+                await asyncio.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                raise RuntimeError(f"Groq error {resp.status_code}: {resp.text}")
+            return resp.json()
+        raise RuntimeError("Groq rate limit exceeded after 3 retries")
 
 
 # ─── Anthropic client ─────────────────────────────────────────────────────────
