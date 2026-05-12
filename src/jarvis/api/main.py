@@ -279,11 +279,11 @@ def create_app() -> FastAPI:
         # Save user message to L2
         await save_session_message(session_id, "user", message)
 
-        if isinstance(agent, CoordinatorAgent):
-            result = await agent.run_orchestrated(message)
-        else:
-            try:
-            result = await agent.run_task(message)
+        try:
+            if isinstance(agent, CoordinatorAgent):
+                result = await agent.run_orchestrated(message)
+            else:
+                result = await agent.run_task(message)
         except Exception as e:
             import traceback
             return {
