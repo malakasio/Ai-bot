@@ -210,9 +210,16 @@ async def start_telegram_bot():
     def auth_required(func):
         async def wrapper(update, context):
             user = update.effective_user
-            if user is None or user.id != cfg.telegram.allowed_user_id:
-                if user:
-                    log.warning(f"Unauthorized: user_id={user.id}")
+            if user is None:
+                return
+            if user.id != cfg.telegram.allowed_user_id:
+                log.warning(f"Unauthorized: user_id={user.id}, expected={cfg.telegram.allowed_user_id}")
+                # Tell the user their ID so they can fix TELEGRAM_USER_ID in Railway
+                await update.message.reply_text(
+                    f"🔒 Unauthorized. Your user ID: `{user.id}`\n"
+                    f"Set `TELEGRAM_USER_ID={user.id}` in Railway Variables.",
+                    parse_mode="Markdown"
+                )
                 return
             await func(update, context)
         return wrapper
@@ -571,31 +578,35 @@ async def start_telegram_bot():
 
     @auth_required
     async def handle_message(update, context):
-        """Plain text → full agent with session memory.
-        Responds with voice if message started with voice-trigger words."""
+        """Plain text → full agent with session memory."""
         text = update.message.text
         if not text:
             return
 
         chat_id = update.effective_chat.id
-        await _typing(update.get_bot(), chat_id)
 
-        session_id = f"telegram_{chat_id}"
-        response = await _run_agent(text, session_id)
+        try:
+            await _typing(update.get_bot(), chat_id)
+            session_id = f"telegram_{chat_id}"
+            response = await _run_agent(text, session_id)
 
-        # Voice response: trigger with /voice prefix or short conversational replies
-        voice_trigger = text.lower().startswith(("/voice", "μίλα", "πες μου", "tell me", "speak"))
-        if voice_trigger and response and len(response) < 500:
-            audio = await _tts_bytes(response)
-            if audio:
-                try:
-                    import io
-                    await update.get_bot().send_voice(chat_id, voice=io.BytesIO(audio))
-                    return
-                except Exception:
-                    pass  # fallback to text
+            # Voice response when user uses trigger words
+            voice_trigger = text.lower().startswith(("/voice", "μίλα", "πες μου", "tell me", "speak"))
+            if voice_trigger and response and len(response) < 500:
+                audio = await _tts_bytes(response)
+                if audio:
+                    try:
+                        import io
+                        await update.get_bot().send_voice(chat_id, voice=io.BytesIO(audio))
+                        await send_safe(update.get_bot(), chat_id, response)
+                        return
+                    except Exception:
+                        pass
 
-        await send_safe(update.get_bot(), chat_id, response)
+            await send_safe(update.get_bot(), chat_id, response)
+        except Exception as e:
+            log.error(f"handle_message error: {e}", exc_info=True)
+            await send_safe(update.get_bot(), chat_id, f"⚠️ {e}")
 
     # ── Register all handlers ─────────────────────────────────────────────────
 
@@ -620,15 +631,38 @@ async def start_telegram_bot():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    # ── /ping — no auth, confirms bot is alive ────────────────────────────────
+
+    async def cmd_ping(update, context):
+        await update.message.reply_text("🟢 JARVIS online!")
+
+    app.add_handler(CommandHandler("ping", cmd_ping))
+
+    # ── Global error handler — makes errors visible in chat ───────────────────
+
+    async def error_handler(update, context):
+        err = str(context.error)
+        log.error(f"Telegram error: {err}", exc_info=context.error)
+        if update and update.effective_chat:
+            try:
+                await context.bot.send_message(
+                    update.effective_chat.id,
+                    f"⚠️ Error: {err[:200]}"
+                )
+            except Exception:
+                pass
+
+    app.add_error_handler(error_handler)
+
     try:
-        await app.bot.get_updates(offset=-1, timeout=1)
+        await app.bot.delete_webhook(drop_pending_updates=True)
     except Exception:
-        await app.bot.delete_webhook(drop_pending_updates=False)
+        pass
 
     log.info(f"Telegram bot ready (user: {cfg.telegram.allowed_user_id})")
     await app.initialize()
     await app.start()
-    await app.updater.start_polling()
+    await app.updater.start_polling(drop_pending_updates=True)
 
 
 # ─── Proactive daily briefing (called by KAIROS) ─────────────────────────────
