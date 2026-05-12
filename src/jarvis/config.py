@@ -59,7 +59,7 @@ class LLMConfig:
 
     # ── FREE CLOUD (Groq — free API, no credit card) ──
     groq_api_key: str = field(default_factory=lambda: _read_credential("groq_key", "GROQ_API_KEY"))
-    groq_fast_model: str = field(default_factory=lambda: os.environ.get("GROQ_FAST_MODEL", "llama-3.2-3b-preview"))
+    groq_fast_model: str = field(default_factory=lambda: os.environ.get("GROQ_FAST_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"))
     groq_smart_model: str = field(default_factory=lambda: os.environ.get("GROQ_SMART_MODEL", "llama-3.3-70b-versatile"))
 
     # ── OPTIONAL PAID (set to use) ──

@@ -36,7 +36,7 @@ log = get_logger("llm")
 
 # ─── Transient error detection ────────────────────────────────────────────────
 
-TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_HTTP_CODES = {500, 502, 503, 504}  # 429 excluded: retrying rate limits makes them worse
 TRANSIENT_EXCEPTIONS: tuple = ()
 
 try:
@@ -194,7 +194,7 @@ async def _groq_call(
     payload = {
         "model": model,
         "messages": groq_messages,
-        "max_tokens": max_tokens,
+        "max_tokens": min(max_tokens, 1024),
         "temperature": 0.7,
     }
 
@@ -427,13 +427,16 @@ async def run_agent(
 
         if response_obj.stop_reason == "tool_use":
             if decision.provider in ("ollama", "groq"):
-                ollama_tool_calls = []
+                openai_tool_calls = []
                 for block in response_obj.content:
                     if hasattr(block, "type") and block.type == "tool_use":
-                        ollama_tool_calls.append({
-                            "function": {"name": block.name, "arguments": block.input}
-                        })
-                history.append({"role": "assistant", "content": "", "tool_calls": ollama_tool_calls})
+                        args = block.input if isinstance(block.input, str) else json.dumps(block.input)
+                        tc = {"function": {"name": block.name, "arguments": args}}
+                        if hasattr(block, "id") and block.id:
+                            tc["id"] = block.id
+                            tc["type"] = "function"
+                        openai_tool_calls.append(tc)
+                history.append({"role": "assistant", "content": "", "tool_calls": openai_tool_calls})
             else:
                 history.append({"role": "assistant", "content": response_obj.content})
 
@@ -467,9 +470,15 @@ async def run_agent(
                     "content": str(result)[:50_000],  # cap at 50KB
                 })
 
-            if decision.provider in ("ollama", "groq"):
+            if decision.provider == "ollama":
                 for tr in tool_results:
                     history.append({"role": "tool", "content": tr["content"]})
+            elif decision.provider == "groq":
+                for tr in tool_results:
+                    msg = {"role": "tool", "content": tr["content"]}
+                    if tr.get("tool_use_id"):
+                        msg["tool_call_id"] = tr["tool_use_id"]
+                    history.append(msg)
             else:
                 history.append({"role": "user", "content": tool_results})
             continue
