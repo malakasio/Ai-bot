@@ -19,6 +19,24 @@ from jarvis.config import get_config
 from jarvis.llm.client import run_agent, simple_completion
 from jarvis.llm.router import route, TASK_TOOL_SETS
 
+_CONVERSATIONAL_WORDS = frozenset([
+    "γεια", "hello", "hi", "hey", "sup", "ok", "okay", "ωραία", "ωραιο",
+    "καλημέρα", "καλησπέρα", "καληνύχτα", "good morning", "good night",
+    "τι κάνεις", "πώς είσαι", "τι είσαι", "ευχαριστώ", "ευχαριστω",
+    "thanks", "thank you", "παρακαλώ", "bye", "αντιο", "αντίο",
+    "ναι", "όχι", "yes", "no", "sure", "σωστό", "σωστα", "τέλεια",
+])
+
+
+def _is_conversational(text: str) -> bool:
+    """True for short greetings/responses that need no tools."""
+    t = text.lower().strip()
+    if len(t) <= 20:
+        return True
+    words = set(t.split())
+    return bool(words & _CONVERSATIONAL_WORDS)
+
+
 _DEFAULT_SYSTEM_PROMPT = """\
 You are JARVIS, an autonomous AI assistant with memory, tools, and background processes.
 
@@ -168,7 +186,13 @@ class BaseAgent:
         # Determine routing
         decision = route(task)
         tool_set = TASK_TOOL_SETS.get(decision.task_type, [])
-        active_tools = [t for t in self._tools if t["name"] in tool_set or not tool_set]
+
+        # Don't pass tools for conversational messages — model uses them blindly
+        # even for greetings, causing XML hallucinations and unnecessary latency
+        if tool_set and not _is_conversational(task):
+            active_tools = [t for t in self._tools if t["name"] in tool_set]
+        else:
+            active_tools = []  # pure conversation: no tools needed
 
         # Get memory context
         from jarvis.memory.store import search_memories, inject_time_context
@@ -215,6 +239,10 @@ class BaseAgent:
                 )
 
                 duration_ms = (time.time() - start_ts) * 1000
+
+                # Never return blank — provide a fallback response
+                if not text or not text.strip():
+                    text = "Κατάλαβα. Πώς μπορώ να βοηθήσω;"
 
                 # Evaluate output quality
                 score = await self._evaluate_output(task, text, decision.task_type)
