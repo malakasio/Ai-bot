@@ -282,7 +282,17 @@ def create_app() -> FastAPI:
         if isinstance(agent, CoordinatorAgent):
             result = await agent.run_orchestrated(message)
         else:
+            try:
             result = await agent.run_task(message)
+        except Exception as e:
+            import traceback
+            return {
+                "session_id": session_id,
+                "response": "",
+                "score": 0.0,
+                "success": False,
+                "error": f"EXCEPTION: {e}\n{traceback.format_exc()[-800:]}",
+            }
 
         # Save assistant reply to L2
         if result.output:
