@@ -158,8 +158,12 @@ async def save_memory(
     Save to long-term memory (L3).
     Automatically generates and stores embedding.
     """
-    embedding = await embed_text(content)
-    embedding_bytes = pack_embedding(embedding)
+    try:
+        embedding = await embed_text(content)
+        embedding_bytes = pack_embedding(embedding)
+    except Exception as e:
+        log.warning(f"Embedding failed for memory save, storing without vector: {e}")
+        embedding_bytes = None
     tags_json = json.dumps(tags or [], ensure_ascii=False)
 
     rowid = await db_write(
@@ -191,36 +195,40 @@ async def search_memories(
     v5 fix: vector-only was missing keyword hits.
     """
     cfg = get_config()
-    query_vec = await embed_text(query)
+    try:
+        query_vec = await embed_text(query)
+    except Exception as e:
+        log.warning(f"Embedding failed for memory search, using FTS-only: {e}")
+        query_vec = None
     cutoff_ts = (time.time() - days_back * 86400) if days_back else 0.0
 
     # Build type filter
     type_clause = "AND memory_type=?" if memory_type else ""
     type_params = (memory_type,) if memory_type else ()
 
-    # 1. Vector search — fetch candidates (brute force, fine for <100K records)
-    rows = await db_fetch_all(
-        f"""SELECT id, content, embedding, importance, memory_type, tags, created_at
-            FROM memories
-            WHERE embedding IS NOT NULL {type_clause}
-            AND created_at >= ?
-            ORDER BY created_at DESC
-            LIMIT 1000""",
-        type_params + (cutoff_ts,),
-    )
+    # 1. Vector search — skip if embedding unavailable
+    vector_top: dict = {}
+    if query_vec is not None:
+        rows = await db_fetch_all(
+            f"""SELECT id, content, embedding, importance, memory_type, tags, created_at
+                FROM memories
+                WHERE embedding IS NOT NULL {type_clause}
+                AND created_at >= ?
+                ORDER BY created_at DESC
+                LIMIT 1000""",
+            type_params + (cutoff_ts,),
+        )
 
-    # Compute cosine similarities
-    vector_results: list[tuple[int, float, dict]] = []
-    for row in rows:
-        if row["embedding"]:
-            mem_vec = unpack_embedding(row["embedding"])
-            sim = cosine_similarity(query_vec, mem_vec)
-            if sim >= min_similarity:
-                vector_results.append((row["id"], sim, row))
+        vector_results: list[tuple[int, float, dict]] = []
+        for row in rows:
+            if row["embedding"]:
+                mem_vec = unpack_embedding(row["embedding"])
+                sim = cosine_similarity(query_vec, mem_vec)
+                if sim >= min_similarity:
+                    vector_results.append((row["id"], sim, row))
 
-    # Sort by similarity
-    vector_results.sort(key=lambda x: x[1], reverse=True)
-    vector_top = {r[0]: (rank + 1, r[1], r[2]) for rank, r in enumerate(vector_results[:top_k * 2])}
+        vector_results.sort(key=lambda x: x[1], reverse=True)
+        vector_top = {r[0]: (rank + 1, r[1], r[2]) for rank, r in enumerate(vector_results[:top_k * 2])}
 
     # 2. FTS5 keyword search
     try:

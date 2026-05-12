@@ -206,21 +206,26 @@ async def supervised_db_writer():
             log.critical(f"DB writer crashed: {e}", exc_info=True)
             _db_ready.clear()
             # Drain pending requests with error to unblock callers
-            while not db_queue.empty():
+            drained = 0
+            while True:
                 try:
                     req = db_queue.get_nowait()
                     if req and not req.future.done():
                         req.future.set_exception(RuntimeError("DB writer restarted"))
+                    drained += 1
                 except asyncio.QueueEmpty:
                     break
+            if drained:
+                log.warning(f"Drained {drained} pending DB requests after crash")
             await asyncio.sleep(2)
-            _db_ready.set()  # allow reconnection
+            # Do NOT set _db_ready here — let the new db_writer_task set it
+            # after the DB is re-opened and INIT_SQL has run.
 
 
 async def db_write(sql: str, params: tuple = ()) -> int:
     """Execute a write. Returns lastrowid."""
     await _db_ready.wait()
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    future: asyncio.Future = asyncio.get_running_loop().create_future()
     await db_queue.put(DBRequest(sql, params, future, "none"))
     return await future
 
@@ -228,7 +233,7 @@ async def db_write(sql: str, params: tuple = ()) -> int:
 async def db_fetch_one(sql: str, params: tuple = ()) -> dict[str, Any] | None:
     """Fetch a single row."""
     await _db_ready.wait()
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    future: asyncio.Future = asyncio.get_running_loop().create_future()
     await db_queue.put(DBRequest(sql, params, future, "one"))
     return await future
 
@@ -236,7 +241,7 @@ async def db_fetch_one(sql: str, params: tuple = ()) -> dict[str, Any] | None:
 async def db_fetch_all(sql: str, params: tuple = ()) -> list[dict[str, Any]]:
     """Fetch all rows."""
     await _db_ready.wait()
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    future: asyncio.Future = asyncio.get_running_loop().create_future()
     await db_queue.put(DBRequest(sql, params, future, "all"))
     return await future
 

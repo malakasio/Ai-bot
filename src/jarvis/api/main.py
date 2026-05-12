@@ -105,13 +105,20 @@ def rate_limit(key: str, max_requests: int = 60, window_s: int = 60) -> bool:
 # ─── Lifespan (startup / shutdown tasks) ──────────────────────────────────────
 
 _telegram_task: asyncio.Task | None = None
+_db_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Start background services on boot, cancel them on shutdown."""
-    global _telegram_task
+    global _telegram_task, _db_task
 
+    # ── DB writer MUST start first — every route that touches storage waits on it
+    from jarvis.memory.database import supervised_db_writer, shutdown_db
+    _db_task = asyncio.create_task(supervised_db_writer(), name="db_writer")
+    log.info("DB writer started")
+
+    # ── Telegram bot (optional)
     cfg = get_config()
     if cfg.telegram.enabled:
         log.info("Telegram bot enabled — starting in background")
@@ -128,12 +135,20 @@ async def _lifespan(app: FastAPI):
 
     yield  # app is running
 
+    # ── Shutdown: Telegram first, then DB (poison pill)
     if _telegram_task and not _telegram_task.done():
         _telegram_task.cancel()
         try:
             await _telegram_task
         except asyncio.CancelledError:
             pass
+
+    await shutdown_db()
+    if _db_task and not _db_task.done():
+        try:
+            await asyncio.wait_for(_db_task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            _db_task.cancel()
 
 
 # ─── App creation ─────────────────────────────────────────────────────────────
