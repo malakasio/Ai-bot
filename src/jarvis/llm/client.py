@@ -36,7 +36,7 @@ log = get_logger("llm")
 
 # ─── Transient error detection ────────────────────────────────────────────────
 
-TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_HTTP_CODES = {500, 502, 503, 504}  # 429 excluded: retrying rate limits makes them worse
 TRANSIENT_EXCEPTIONS: tuple = ()
 
 try:
@@ -88,6 +88,7 @@ MODEL_COSTS_PER_1K = {
     "claude-sonnet": (0.003, 0.015),
     "claude-opus": (0.015, 0.075),
     "gpt-4o-mini": (0.00015, 0.0006),
+    "groq": (0.0, 0.0),
     "ollama": (0.0, 0.0),
 }
 
@@ -150,7 +151,18 @@ async def _ollama_call(
     }
 
     if tools:
-        payload["tools"] = tools
+        # Ollama expects OpenAI tool format
+        ollama_tools = []
+        for t in tools:
+            ollama_tools.append({
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema", t.get("parameters", {})),
+                },
+            })
+        payload["tools"] = ollama_tools
 
     timeout = aiohttp.ClientTimeout(total=120)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -161,6 +173,56 @@ async def _ollama_call(
             data = await resp.json()
 
     return data
+
+
+# ─── Groq client (FREE cloud LLM — OpenAI-compatible) ─────────────────────────
+
+async def _groq_call(
+    model: str,
+    messages: list[dict],
+    system: str,
+    tools: list[dict],
+    max_tokens: int,
+) -> dict:
+    """Call Groq API (free tier, no credit card required)."""
+    import httpx
+    cfg = get_config()
+
+    groq_messages = ([{"role": "system", "content": system}] + messages) if system else messages
+
+    payload: dict = {
+        "model": model,
+        "messages": groq_messages,
+        "max_tokens": min(max_tokens, 32768),
+        "temperature": 0.7,
+    }
+
+    if tools:
+        openai_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema", t.get("parameters", {})),
+                },
+            }
+            for t in tools
+        ]
+        payload["tools"] = openai_tools
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {cfg.llm.groq_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Groq error {resp.status_code}: {resp.text}")
+        return resp.json()
 
 
 # ─── Anthropic client ─────────────────────────────────────────────────────────
@@ -246,34 +308,79 @@ async def run_agent(
                             tools=tools,
                             max_tokens=cfg.llm.max_tokens_fast,
                         )
-                        # Parse Ollama response
                         msg = raw_response.get("message", {})
-                        content = msg.get("content", "")
-                        tool_calls = msg.get("tool_calls", [])
-                        stop_reason = "end_turn" if not tool_calls else "tool_use"
-                        usage = raw_response.get("prompt_eval_count", 0), raw_response.get("eval_count", 0)
+                        content = msg.get("content", "") or ""
+                        tool_calls = msg.get("tool_calls", []) or []
+                        stop_reason = "tool_use" if tool_calls else "end_turn"
+                        input_tokens = raw_response.get("prompt_eval_count", 0)
+                        output_tokens = raw_response.get("eval_count", 0)
 
-                        class _OllamaBlock:
+                        class _OllamaTextBlock:
                             def __init__(self, data):
                                 self.type = "text"
                                 self.text = data
 
-                        class _ToolBlock:
-                            def __init__(self, call):
+                        class _OllamaToolBlock:
+                            def __init__(self, call, idx):
                                 self.type = "tool_use"
-                                self.id = call.get("id", f"call_{iteration}")
+                                self.id = call.get("id", f"call_{iteration}_{idx}")
                                 self.name = call.get("function", {}).get("name", "")
-                                self.input = json.loads(call.get("function", {}).get("arguments", "{}"))
+                                raw_args = call.get("function", {}).get("arguments", {})
+                                self.input = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
 
-                        content_blocks = [_OllamaBlock(content)]
+                        content_blocks = [_OllamaTextBlock(content)]
                         if tool_calls:
-                            content_blocks.extend([_ToolBlock(tc) for tc in tool_calls])
+                            content_blocks.extend([_OllamaToolBlock(tc, i) for i, tc in enumerate(tool_calls)])
 
-                        input_tokens, output_tokens = usage
                         response_obj = type("Resp", (), {
                             "stop_reason": stop_reason,
                             "content": content_blocks,
                             "usage": type("U", (), {"input_tokens": input_tokens, "output_tokens": output_tokens})(),
+                        })()
+
+                    elif decision.provider == "groq":
+                        raw_response = await _groq_call(
+                            model=decision.model,
+                            messages=history,
+                            system=system,
+                            tools=tools,
+                            max_tokens=cfg.llm.max_tokens_fast,
+                        )
+                        choice = raw_response.get("choices", [{}])[0]
+                        msg = choice.get("message", {})
+                        content = msg.get("content", "") or ""
+                        tool_calls = msg.get("tool_calls", []) or []
+                        finish_reason = choice.get("finish_reason", "stop")
+                        stop_reason = "tool_use" if finish_reason == "tool_calls" else (
+                            "max_tokens" if finish_reason == "length" else "end_turn"
+                        )
+                        usage_data = raw_response.get("usage", {})
+
+                        class _GroqTextBlock:
+                            def __init__(self, data):
+                                self.type = "text"
+                                self.text = data
+
+                        class _GroqToolBlock:
+                            def __init__(self, call):
+                                self.type = "tool_use"
+                                self.id = call.get("id", "")
+                                fn = call.get("function", {})
+                                self.name = fn.get("name", "")
+                                raw_args = fn.get("arguments", "{}")
+                                self.input = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
+
+                        content_blocks = [_GroqTextBlock(content)]
+                        if tool_calls:
+                            content_blocks.extend([_GroqToolBlock(tc) for tc in tool_calls])
+
+                        response_obj = type("Resp", (), {
+                            "stop_reason": stop_reason,
+                            "content": content_blocks,
+                            "usage": type("U", (), {
+                                "input_tokens": usage_data.get("prompt_tokens", 0),
+                                "output_tokens": usage_data.get("completion_tokens", 0),
+                            })(),
                         })()
 
                     else:
@@ -305,13 +412,32 @@ async def run_agent(
             break
 
         if response_obj.stop_reason == "max_tokens":
-            # v6 fix: continue from where it stopped
-            history.append({"role": "assistant", "content": response_obj.content})
+            # Continue from where it stopped — use plain text for non-Anthropic
+            if decision.provider in ("ollama", "groq"):
+                text_so_far = "".join(
+                    b.text for b in response_obj.content if hasattr(b, "text") and b.type == "text"
+                )
+                history.append({"role": "assistant", "content": text_so_far})
+            else:
+                history.append({"role": "assistant", "content": response_obj.content})
             history.append({"role": "user", "content": "Continue from where you stopped."})
             continue
 
         if response_obj.stop_reason == "tool_use":
-            history.append({"role": "assistant", "content": response_obj.content})
+            # Anthropic expects content blocks; Ollama/Groq expect OpenAI tool_calls format
+            if decision.provider in ("ollama", "groq"):
+                openai_tool_calls = []
+                for block in response_obj.content:
+                    if hasattr(block, "type") and block.type == "tool_use":
+                        args = block.input if isinstance(block.input, str) else json.dumps(block.input)
+                        tc: dict = {"type": "function", "function": {"name": block.name, "arguments": args}}
+                        if hasattr(block, "id") and block.id:
+                            tc["id"] = block.id
+                        openai_tool_calls.append(tc)
+                history.append({"role": "assistant", "content": "", "tool_calls": openai_tool_calls})
+            else:
+                history.append({"role": "assistant", "content": response_obj.content})
+
             tool_results = []
 
             for block in response_obj.content:
@@ -339,10 +465,21 @@ async def run_agent(
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
-                    "content": str(result)[:50_000],  # cap at 50KB
+                    "content": str(result)[:50_000],
                 })
 
-            history.append({"role": "user", "content": tool_results})
+            # Tool results format differs by provider
+            if decision.provider == "ollama":
+                for tr in tool_results:
+                    history.append({"role": "tool", "content": tr["content"]})
+            elif decision.provider == "groq":
+                for tr in tool_results:
+                    msg: dict = {"role": "tool", "content": tr["content"]}
+                    if tr.get("tool_use_id"):
+                        msg["tool_call_id"] = tr["tool_use_id"]
+                    history.append(msg)
+            else:
+                history.append({"role": "user", "content": tool_results})
             continue
 
         # Unknown stop reason

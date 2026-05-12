@@ -396,6 +396,8 @@ def create_app() -> FastAPI:
     async def memory_search(q: str, days: int | None = None):
         from jarvis.memory.store import search_memories
         results = await search_memories(q, top_k=10, days_back=days)
+        for r in results:
+            r.pop("embedding", None)  # bytes are not JSON-serializable
         return {"query": q, "results": results}
 
     # ── Rollback ─────────────────────────────────────────────────────────────

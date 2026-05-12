@@ -17,7 +17,7 @@ from typing import Any, Callable, Optional
 
 from jarvis.config import get_config
 from jarvis.llm.client import run_agent, simple_completion
-from jarvis.llm.router import route, select_model, TASK_TOOL_SETS
+from jarvis.llm.router import route, TASK_TOOL_SETS
 from jarvis.memory.database import db_write, db_fetch_one
 from jarvis.memory.store import save_memory, load_procedural_memory, propose_skill_update
 from jarvis.observability.logger import get_logger, get_audit

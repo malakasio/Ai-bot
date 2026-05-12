@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: jarvis
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: JARVIS_HOME
+        value: /app/jarvis_data
+      - key: JARVIS_HOST
+        value: 0.0.0.0
+      - key: JARVIS_PORT
+        value: "8080"
+      - key: USER_TIMEZONE
+        value: Europe/Athens
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_USER_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

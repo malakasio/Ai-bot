@@ -57,6 +57,11 @@ class LLMConfig:
     ollama_smart_model: str = field(default_factory=lambda: os.environ.get("OLLAMA_SMART_MODEL", "mistral:7b"))
     ollama_embed_model: str = field(default_factory=lambda: os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
 
+    # ── FREE CLOUD (Groq — free API key at console.groq.com/keys) ──
+    groq_api_key: str = field(default_factory=lambda: _read_credential("groq_key", "GROQ_API_KEY"))
+    groq_fast_model: str = field(default_factory=lambda: os.environ.get("GROQ_FAST_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"))
+    groq_smart_model: str = field(default_factory=lambda: os.environ.get("GROQ_SMART_MODEL", "llama-3.3-70b-versatile"))
+
     # ── OPTIONAL PAID (set to use) ──
     anthropic_api_key: str = field(default_factory=lambda: _read_credential("anthropic_key", "ANTHROPIC_API_KEY"))
     openai_api_key: str = field(default_factory=lambda: _read_credential("openai_key", "OPENAI_API_KEY"))
@@ -74,6 +79,10 @@ class LLMConfig:
     max_tokens_analysis: int = 8192
     daily_token_budget: int = int(os.environ.get("DAILY_TOKEN_BUDGET", "500000"))
     max_iterations: int = 20
+
+    @property
+    def has_groq(self) -> bool:
+        return bool(self.groq_api_key)
 
     @property
     def has_anthropic(self) -> bool:

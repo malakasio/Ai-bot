@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Literal
 
@@ -60,6 +59,12 @@ SAFE_COMMANDS: dict[str, dict] = {
     "git": {"allowed_dirs": None, "max_bytes": None},  # git commands allowed
     "python3": {"allowed_dirs": None, "max_bytes": None},
     "pip": {"allowed_dirs": None, "max_bytes": None},
+    "sleep": {"allowed_dirs": None, "max_bytes": None},
+    "true": {"allowed_dirs": None, "max_bytes": None},
+    "false": {"allowed_dirs": None, "max_bytes": None},
+    "env": {"allowed_dirs": None, "max_bytes": None},
+    "which": {"allowed_dirs": None, "max_bytes": None},
+    "uname": {"allowed_dirs": None, "max_bytes": None},
 }
 
 LAB_COMMANDS: dict[str, dict] = {

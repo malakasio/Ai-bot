@@ -73,22 +73,22 @@ EXPECTED_OUTPUT_TOKENS: dict[TaskType, int] = {
     "embedding": 0,
 }
 
-# Tool sets per task type (v5 fix: pre-defined, not dynamic)
+# Tool sets per task type — names must match keys in tools/registry.py ALL_TOOLS
 TASK_TOOL_SETS: dict[TaskType, list[str]] = {
-    "code_review": ["filesystem", "git", "terminal"],
-    "code_generation": ["filesystem", "git", "terminal"],
-    "system_mgmt": ["filesystem", "terminal", "system"],
-    "monitoring": ["filesystem", "terminal"],
-    "analysis": ["filesystem", "web_search"],
-    "simple_qa": ["web_search"],
-    "voice": [],
-    "notification": ["telegram"],
-    "architecture": ["filesystem"],
-    "deep_debug": ["filesystem", "terminal", "git"],
-    "critical": ["filesystem", "terminal", "git"],
-    "lab": ["network", "filesystem", "terminal"],
-    "summarization": ["filesystem"],
-    "embedding": [],
+    "code_review":      ["read_file", "write_file", "list_dir", "bash", "web_search"],
+    "code_generation":  ["read_file", "write_file", "list_dir", "bash"],
+    "system_mgmt":      ["read_file", "write_file", "list_dir", "bash", "get_status"],
+    "monitoring":       ["read_file", "list_dir", "bash", "get_status"],
+    "analysis":         ["read_file", "list_dir", "web_search", "memory_search"],
+    "simple_qa":        ["web_search", "memory_search", "get_status"],
+    "voice":            [],
+    "notification":     [],
+    "architecture":     ["read_file", "list_dir", "web_search"],
+    "deep_debug":       ["read_file", "write_file", "list_dir", "bash"],
+    "critical":         ["read_file", "write_file", "list_dir", "bash"],
+    "lab":              ["network_scan", "http_request", "read_file", "bash"],
+    "summarization":    ["read_file", "list_dir", "memory_search"],
+    "embedding":        [],
 }
 
 # Keyword → task type mapping (v4 rule-based routing)
@@ -136,6 +136,20 @@ def select_model(task_type: TaskType) -> RoutingDecision:
         log.warning("Lab task requested but JARVIS_LAB_MODE not enabled, downgrading to simple_qa")
 
     expected_tokens = EXPECTED_OUTPUT_TOKENS.get(task_type, 1024)
+
+    # Groq (FREE cloud) — use when available and no paid key configured
+    if cfg.llm.has_groq and not cfg.llm.has_any_paid:
+        model = (
+            cfg.llm.groq_smart_model
+            if task_type in ("architecture", "deep_debug", "critical", "code_generation", "code_review", "analysis")
+            else cfg.llm.groq_fast_model
+        )
+        return RoutingDecision(
+            task_type=task_type, tier="local_fast",
+            model=model, provider="groq",
+            reason="free Groq cloud LLM",
+            expected_tokens=expected_tokens,
+        )
 
     # If no paid API available — use local Ollama for everything
     if not cfg.llm.has_any_paid:
