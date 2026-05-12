@@ -144,6 +144,39 @@ async def tool_get_status() -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
+async def tool_deep_research(topic: str, depth: int = 3) -> str:
+    """
+    Autonomous multi-step research: search → browse top results → synthesize.
+    Use for complex questions requiring multiple sources.
+    depth: number of pages to read (1-5).
+    """
+    from jarvis.tools.registry import tool_web_search, tool_web_browse
+    import asyncio
+
+    # Step 1: Search
+    search_results = await tool_web_search(topic, max_results=depth + 2)
+    if not search_results or "No results" in search_results:
+        return f"No search results found for: {topic}"
+
+    # Step 2: Extract URLs and browse top N
+    import re
+    urls = re.findall(r'https?://[^\s\)]+', search_results)[:depth]
+    if not urls:
+        return search_results  # Return search results if no URLs found
+
+    # Step 3: Browse pages in parallel
+    browse_tasks = [tool_web_browse(url) for url in urls]
+    pages = await asyncio.gather(*browse_tasks, return_exceptions=True)
+
+    # Step 4: Compile research
+    parts = [f"## Search results for: {topic}\n{search_results[:500]}\n"]
+    for i, (url, page) in enumerate(zip(urls, pages)):
+        if isinstance(page, str) and len(page) > 100:
+            parts.append(f"## Source {i+1}: {url}\n{page[:2000]}")
+
+    return "\n\n".join(parts)[:12000]
+
+
 async def tool_web_browse(url: str) -> str:
     """Fetch a webpage and return its readable text content."""
     import httpx, re
@@ -370,6 +403,18 @@ ALL_TOOLS: dict[str, dict] = {
             "required": ["url"],
         },
         "handler": tool_http_request,
+    },
+    "deep_research": {
+        "description": "Autonomous multi-step research: searches the web, reads multiple sources, and returns synthesized information. Use for complex questions needing multiple sources.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Topic or question to research"},
+                "depth": {"type": "integer", "description": "Number of sources to read (1-5, default 3)"},
+            },
+            "required": ["topic"],
+        },
+        "handler": tool_deep_research,
     },
     "web_browse": {
         "description": "Fetch a webpage and return its readable text content. Use for reading articles, documentation, or any web page.",

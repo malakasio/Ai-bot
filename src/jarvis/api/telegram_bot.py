@@ -145,9 +145,12 @@ async def _run_agent(text: str, session_id: str) -> str:
         if not is_complex:
             _agent_cache[session_id] = (agent, time.time())
 
+    from jarvis.config import get_config as _gc2
+    _hist_limit = 40 if _gc2().llm.has_anthropic else 6
+    _content_limit = 2000 if _gc2().llm.has_anthropic else 500
     agent.prior_messages = [
-        {"role": m["role"], "content": m["content"][:500]}
-        for m in history[-6:]
+        {"role": m["role"], "content": m["content"][:_content_limit]}
+        for m in history[-_hist_limit:]
         if m["role"] in ("user", "assistant")
     ]
 

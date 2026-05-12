@@ -396,13 +396,27 @@ async def run_agent(
 
                     else:
                         client = await _get_anthropic_client()
-                        response_obj = await client.messages.create(
-                            model=decision.model,
-                            max_tokens=cfg.llm.max_tokens_fast,
-                            system=system,
-                            messages=history,
-                            tools=tools if tools else [],
+                        # Extended Thinking: enable for Opus/Sonnet on complex tasks
+                        # Blueprint §2: deep reasoning before acting
+                        use_thinking = (
+                            decision.task_type in (
+                                "architecture", "deep_debug", "critical",
+                                "code_generation", "analysis", "code_review"
+                            )
+                            and "opus" in decision.model or "sonnet" in decision.model
                         )
+                        create_kwargs: dict = {
+                            "model": decision.model,
+                            "max_tokens": cfg.llm.max_tokens_analysis if use_thinking else cfg.llm.max_tokens_fast,
+                            "system": system,
+                            "messages": history,
+                        }
+                        if tools:
+                            create_kwargs["tools"] = tools
+                        if use_thinking:
+                            # Budget: allow up to 10k thinking tokens for complex tasks
+                            create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": 10000}
+                        response_obj = await client.messages.create(**create_kwargs)
         except Exception as e:
             # Blueprint resilience: provider unavailable → try next in chain
             # Groq 5xx → Anthropic (if key set) → raise
@@ -434,12 +448,15 @@ async def run_agent(
 
         if response_obj.stop_reason == "end_turn":
             text = "".join(
-                b.text for b in response_obj.content if hasattr(b, "text") and b.type == "text"
+                b.text for b in response_obj.content
+                if hasattr(b, "text") and getattr(b, "type", "") == "text"
+                # skip "thinking" blocks — they're internal reasoning, not visible response
             )
-            # Strip XML tool-call hallucinations (small models output <websearch> etc. as text)
-            import re as _re
-            text = _re.sub(r"<(websearch|memorysearch|getstatus|memory_search|web_search|python_exec|web_browse|memory_save|bash|read_file|write_file)[^>]*/?>.*?</\1>", "", text, flags=_re.S | _re.I)
-            text = _re.sub(r"<(websearch|memorysearch|getstatus|memory_search|web_search|python_exec|web_browse|memory_save|bash|read_file|write_file)[^/]*/?>", "", text, flags=_re.I)
+            # Strip XML tool-call hallucinations (small models only)
+            if decision.provider != "anthropic":
+                import re as _re
+                text = _re.sub(r"<(websearch|memorysearch|getstatus|memory_search|web_search|python_exec|web_browse|memory_save|bash|read_file|write_file)[^>]*/?>.*?</\1>", "", text, flags=_re.S | _re.I)
+                text = _re.sub(r"<(websearch|memorysearch|getstatus|memory_search|web_search|python_exec|web_browse|memory_save|bash|read_file|write_file)[^/]*/?>", "", text, flags=_re.I)
             text = text.strip()
             break
 

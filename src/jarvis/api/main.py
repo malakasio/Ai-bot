@@ -291,9 +291,12 @@ def create_app() -> FastAPI:
                     agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
 
         # Inject prior turns so the agent has conversational context
+        # Claude 1M context: use full session history; others: last 6
+        hist_limit = 40 if get_config().llm.has_anthropic else 6
+        content_limit = 2000 if get_config().llm.has_anthropic else 500
         agent.prior_messages = [
-            {"role": m["role"], "content": m["content"][:500]}
-            for m in history[-6:]
+            {"role": m["role"], "content": m["content"][:content_limit]}
+            for m in history[-hist_limit:]
             if m["role"] in ("user", "assistant")
         ]
 

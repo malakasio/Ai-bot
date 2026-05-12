@@ -147,15 +147,21 @@ class BaseAgent:
         if self._system_prompt is None:
             from pathlib import Path
             from jarvis.config import JARVIS_HOME
-
-            # Priority: env var > JARVIS_HOME/system.md > default built-in
-            # CLAUDE.md is for AI agents working on the codebase, not user chat
             import os
+
+            # Priority: env var > JARVIS_HOME/system.md > JARVIS_HOME/CLAUDE.md > default
+            # When Claude API is active, use CLAUDE.md as the actual system prompt
+            # (blueprint: "CLAUDE.md = DNA of the agent — loaded once at startup")
             if os.environ.get("JARVIS_SYSTEM_PROMPT"):
                 self._system_prompt = os.environ["JARVIS_SYSTEM_PROMPT"]
+            elif (JARVIS_HOME / "system.md").exists():
+                self._system_prompt = (JARVIS_HOME / "system.md").read_text().strip()
+            elif Path("CLAUDE.md").exists() and get_config().llm.has_anthropic:
+                # With Claude Opus/Sonnet, CLAUDE.md fits in context — use it fully
+                self._system_prompt = Path("CLAUDE.md").read_text().strip()
+                log.info("System prompt loaded from CLAUDE.md (Claude API active)")
             else:
-                custom = JARVIS_HOME / "system.md"
-                self._system_prompt = custom.read_text().strip() if custom.exists() else _DEFAULT_SYSTEM_PROMPT
+                self._system_prompt = _DEFAULT_SYSTEM_PROMPT
 
         # Load top-3 most relevant SKILL.md rules (keep short to save tokens)
         self._skill_cache = load_procedural_memory()
@@ -221,7 +227,9 @@ class BaseAgent:
         # Run memory search + task DB write in PARALLEL — not sequential
         from jarvis.memory.store import search_memories, inject_time_context
 
-        memories_task = asyncio.create_task(search_memories(task, top_k=5))
+        # Claude has 1M context — use more memories for richer context
+        memory_top_k = 20 if get_config().llm.has_anthropic else 5
+        memories_task = asyncio.create_task(search_memories(task, top_k=memory_top_k))
         db_task = asyncio.create_task(db_write(
             """INSERT INTO tasks (id, task_type, payload, status, agent_id)
                VALUES (?,?,?,?,?)
@@ -233,8 +241,13 @@ class BaseAgent:
         memories, _ = await asyncio.gather(memories_task, db_task)
         memory_context = ""
         if memories:
-            memory_items = "\n".join(f"- [{m['time_human']}] {m['content'][:200]}" for m in memories[:3])
-            memory_context = f"\n\nRelevant memories:\n{memory_items}"
+            # Claude: inject up to 20 memories with full content; others: 3 truncated
+            limit = len(memories) if get_config().llm.has_anthropic else 3
+            trunc = 500 if get_config().llm.has_anthropic else 200
+            memory_items = "\n".join(
+                f"- [{m['time_human']}] {m['content'][:trunc]}" for m in memories[:limit]
+            )
+            memory_context = f"\n\nRelevant memories ({len(memories[:limit])} found):\n{memory_items}"
 
         enriched_task = inject_time_context(task) + memory_context
 
