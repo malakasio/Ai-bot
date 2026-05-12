@@ -206,6 +206,23 @@ def create_app() -> FastAPI:
         data = metrics.to_dashboard_dict()
         return {"status": "ok", "uptime": data["uptime_seconds"], "metrics": data}
 
+    @app.get("/config-check")
+    async def config_check():
+        """Shows which services are configured (no secrets exposed)."""
+        cfg = get_config()
+        return {
+            "llm": {
+                "groq": cfg.llm.has_groq,
+                "anthropic": cfg.llm.has_anthropic,
+                "openai": cfg.llm.has_openai,
+                "ollama_url": cfg.llm.ollama_base_url,
+            },
+            "telegram": cfg.telegram.enabled,
+            "jarvis_home": str(cfg.memory.db_path.parent),
+            "zone": cfg.security.zone,
+            "kairos_enabled": cfg.kairos.enabled,
+        }
+
     @app.get("/metrics", response_class=PlainTextResponse)
     async def prometheus_metrics():
         return get_metrics().to_prometheus_text()

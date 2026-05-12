@@ -118,15 +118,31 @@ function addMessage(role, text) {
 async function sendMessage(text) {
   if (!text.trim()) return;
   addMessage('user', text);
-  const loadingEl = addMessage('system', '⏳ Thinking...');
+  const loadingEl = addMessage('system', '⏳ Σκέφτομαι...');
   try {
-    const data = await api('/chat', {method:'POST', body: JSON.stringify({message: text})});
+    const data = await api('/chat', {method:'POST', body: JSON.stringify({message: text, session_id: getSessionId()})});
     loadingEl.remove();
-    addMessage('assistant', data.response || '[No response]');
+    if (data.response && data.response.trim()) {
+      addMessage('assistant', data.response);
+    } else if (data.error) {
+      const hint = data.error.includes('ClientConnector') || data.error.includes('RetryError')
+        ? '❌ Δεν βρέθηκε LLM. Πρόσθεσε **GROQ_API_KEY** στα Railway Variables και κάνε redeploy.'
+        : `❌ ${data.error}`;
+      addMessage('system', hint);
+    } else {
+      addMessage('system', '❌ Δεν ήρθε απάντηση. Ελέγξε ότι έχεις GROQ_API_KEY στα Railway Variables.');
+    }
   } catch(e) {
     loadingEl.remove();
-    addMessage('system', `Error: ${e.message}`);
+    addMessage('system', `❌ ${e.message}`);
   }
+}
+
+function getSessionId() {
+  if (!localStorage.jarvisSession) {
+    localStorage.jarvisSession = 'web_' + Math.random().toString(36).slice(2);
+  }
+  return localStorage.jarvisSession;
 }
 
 document.getElementById('send-btn').onclick = () => {
@@ -240,10 +256,13 @@ async function updateMetrics() {
     document.getElementById('m-cost').textContent = `$${d.llm.cost_usd.toFixed(4)}`;
     document.getElementById('m-memory').textContent = d.memory.records;
     document.getElementById('m-errors').textContent = `${d.tasks.error_rate_1h_pct.toFixed(1)}%`;
-    document.getElementById('provider-info').textContent = 'Connected';
+    // Show provider info
+    const hasLLM = d.llm.requests > 0 || d.llm.errors < 5;
+    document.getElementById('provider-info').textContent = hasLLM ? '✅ Connected' : '⚠️ No GROQ_API_KEY set';
     document.getElementById('status-dot').classList.add('connected');
   } catch(e) {
     document.getElementById('status-dot').classList.remove('connected');
+    document.getElementById('provider-info').textContent = '❌ Offline';
   }
 }
 
