@@ -66,6 +66,15 @@ def _load_model():
         _embed_dim = 1536
         log.info(f"Using OpenAI embeddings: {_model_name}")
 
+    elif provider == "jina":
+        import os
+        # Jina AI: free 1M tokens/month — set JINA_API_KEY in Railway Variables
+        # No heavy dependencies, pure HTTP call from executor thread
+        _model = os.environ.get("JINA_API_KEY", "")
+        _model_name = "jina-embeddings-v3"
+        _embed_dim = 1024
+        log.info(f"Using Jina AI embeddings: {_model_name} ({_embed_dim}d)")
+
     else:
         raise ValueError(f"Unknown embed_provider: {provider}")
 
@@ -74,7 +83,7 @@ async def ensure_model_loaded():
     """Load model in executor so it doesn't block the event loop."""
     global _model
     if _model is None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(_executor, _load_model)
 
 
@@ -104,6 +113,19 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
         response = _model.embeddings.create(input=texts, model=_model_name)
         return [item.embedding for item in response.data]
 
+    elif provider == "jina":
+        import httpx
+        api_key = _model  # stored as API key string during _load_model
+        resp = httpx.post(
+            "https://api.jina.ai/v1/embeddings",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"input": texts, "model": _model_name},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return [item["embedding"] for item in data["data"]]
+
     raise ValueError(f"_embed_sync: unhandled provider '{provider}'")
 
 
@@ -115,7 +137,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     await ensure_model_loaded()
     if not texts:
         return []
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, _embed_sync, texts)
 
 

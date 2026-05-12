@@ -80,6 +80,21 @@ async def _typing(bot, chat_id: int):
         pass
 
 
+async def _tts_bytes(text: str) -> bytes | None:
+    """Generate TTS audio with edge-tts. Returns MP3 bytes or None on failure."""
+    try:
+        import edge_tts, io
+        cfg = get_config()
+        communicate = edge_tts.Communicate(text, voice=cfg.voice.edge_tts_voice)
+        buf = io.BytesIO()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                buf.write(chunk["data"])
+        return buf.getvalue() if buf.tell() > 0 else None
+    except Exception:
+        return None
+
+
 async def _run_agent(text: str, session_id: str) -> str:
     """Run the full agent with session memory and all tools."""
     from jarvis.agents.base import BaseAgent
@@ -483,6 +498,19 @@ async def start_telegram_bot():
 
         session_id = f"telegram_{chat_id}"
         response = await _run_agent(text, session_id)
+
+        # Reply with voice when input was voice (AGI voice-to-voice loop)
+        if response and len(response) < 600:
+            audio = await _tts_bytes(response)
+            if audio:
+                try:
+                    import io
+                    await update.get_bot().send_voice(chat_id, voice=io.BytesIO(audio))
+                    await send_safe(update.get_bot(), chat_id, response)  # also send text
+                    return
+                except Exception:
+                    pass
+
         await send_safe(update.get_bot(), chat_id, response)
 
     # ── Photo handler ─────────────────────────────────────────────────────────
@@ -543,7 +571,8 @@ async def start_telegram_bot():
 
     @auth_required
     async def handle_message(update, context):
-        """Plain text → full agent with session memory."""
+        """Plain text → full agent with session memory.
+        Responds with voice if message started with voice-trigger words."""
         text = update.message.text
         if not text:
             return
@@ -553,6 +582,19 @@ async def start_telegram_bot():
 
         session_id = f"telegram_{chat_id}"
         response = await _run_agent(text, session_id)
+
+        # Voice response: trigger with /voice prefix or short conversational replies
+        voice_trigger = text.lower().startswith(("/voice", "μίλα", "πες μου", "tell me", "speak"))
+        if voice_trigger and response and len(response) < 500:
+            audio = await _tts_bytes(response)
+            if audio:
+                try:
+                    import io
+                    await update.get_bot().send_voice(chat_id, voice=io.BytesIO(audio))
+                    return
+                except Exception:
+                    pass  # fallback to text
+
         await send_safe(update.get_bot(), chat_id, response)
 
     # ── Register all handlers ─────────────────────────────────────────────────

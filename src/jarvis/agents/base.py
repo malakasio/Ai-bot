@@ -202,7 +202,10 @@ class BaseAgent:
                 if decision.task_type in ("code_generation", "system_mgmt", "architecture"):
                     await create_rollback_point(f"pre-task-{task_id[:8]}")
 
-                messages = self.prior_messages + [{"role": "user", "content": enriched_task}]
+                from jarvis.memory.store import trim_context
+                raw_messages = self.prior_messages + [{"role": "user", "content": enriched_task}]
+                max_tok = get_config().memory.max_working_memory_tokens
+                messages = trim_context(raw_messages, self._system_prompt, max_tok)
 
                 text, usage = await run_agent(
                     messages=messages,
@@ -286,48 +289,96 @@ class BaseAgent:
             duration_ms=(time.time() - start_ts) * 1000,
         )
 
+    # Failure modes tracked by the self-improvement loop
+    FAILURE_MODES = {
+        "hallucination": ["I think", "I believe", "probably", "might be", "not sure"],
+        "tool_failure": ["[TOOL ERROR", "[ERROR:", "[BLOCKED:", "[TIMEOUT:"],
+        "incomplete": ["...", "to be continued", "in progress", "TODO"],
+        "off_topic": [],  # detected by LLM evaluation
+    }
+
     async def _evaluate_output(self, task: str, output: str, task_type: str) -> float:
         """
-        Evaluate output quality (0-100 score).
-        Uses a lightweight evaluation LLM call.
+        Evaluate output quality (0-100). Heuristic first, LLM validation for borderline cases.
+        Identifies failure modes: hallucination, tool_failure, incomplete, off_topic.
         """
         if not output.strip():
             return 0.0
         if len(output) < 10:
             return 20.0
 
-        # Quick heuristic evaluation (no LLM call to save tokens)
         score = 50.0
+        detected_modes: list[str] = []
+
+        # Tool failures are hard failures
+        if any(kw in output for kw in self.FAILURE_MODES["tool_failure"]):
+            score -= 20
+            detected_modes.append("tool_failure")
 
         # Length appropriateness
-        if 50 < len(output) < 10000:
+        if 30 < len(output) < 12000:
             score += 15
 
-        # No error indicators
-        error_keywords = ["[TOOL ERROR", "[ERROR:", "failed to", "exception", "traceback"]
-        if not any(kw.lower() in output.lower() for kw in error_keywords):
-            score += 15
-
-        # Completeness: doesn't end mid-sentence
-        if output.strip()[-1] in ".!?»\n":
+        # No error keywords  
+        if not any(kw.lower() in output.lower() for kw in ["failed to", "exception", "traceback"]):
             score += 10
 
-        # Task-specific checks
-        if task_type in ("code_generation", "code_review"):
-            if "```" in output or "def " in output or "class " in output:
-                score += 10  # Has code
+        # Completeness
+        if output.strip()[-1] in ".!?»\n":
+            score += 10
+        else:
+            detected_modes.append("incomplete")
 
-        return min(100.0, score)
+        # Uncertainty language → possible hallucination
+        lower = output.lower()
+        if sum(1 for w in self.FAILURE_MODES["hallucination"] if w in lower) >= 3:
+            score -= 10
+            detected_modes.append("hallucination")
+
+        # Task-specific bonuses
+        if task_type in ("code_generation", "code_review") and ("```" in output or "def " in output):
+            score += 10
+        if task_type == "analysis" and len(output) > 200:
+            score += 5
+
+        score = min(100.0, max(0.0, score))
+
+        # LLM micro-evaluation only when heuristic is borderline (35-75) and task matters
+        if 35 < score < 75 and task_type not in ("simple_qa", "voice", "notification"):
+            try:
+                from jarvis.llm.client import simple_completion
+                eval_prompt = (
+                    f"Task: {task[:150]}\n"
+                    f"Response: {output[:300]}\n"
+                    "Rate this response 0-100. Reply ONLY with a number."
+                )
+                rating_str = await simple_completion(eval_prompt, task_type="simple_qa")
+                import re
+                m = re.search(r"\b(\d{1,3})\b", rating_str)
+                if m:
+                    llm_score = float(m.group(1))
+                    # Blend: heuristic 60% + LLM 40%
+                    score = score * 0.6 + llm_score * 0.4
+            except Exception:
+                pass  # LLM eval is best-effort
+
+        self._last_failure_modes = detected_modes
+        return min(100.0, max(0.0, score))
+
+    _last_failure_modes: list[str] = []
 
     async def _propose_improvement(self, task: str, output: str, score: float, task_type: str):
         """
-        v4 Level 1 self-improvement: propose SKILL.md update (not auto-apply).
-        Human reviews via /skill_proposals Telegram command.
+        Self-improvement: propose SKILL.md update with identified failure modes.
+        Human reviews via /skill_proposals in Telegram, then auto-applies.
         """
-        proposal = f"""Low score task ({score:.0f}/100):
-Task: {task[:200]}
-Output quality issues: needs improvement
-Suggested rule: Review this task type and add specific guidance.
-"""
+        modes = ", ".join(self._last_failure_modes) if self._last_failure_modes else "quality below threshold"
+        proposal = (
+            f"Score: {score:.0f}/100 | Failure modes: {modes}\n"
+            f"Task: {task[:200]}\n"
+            f"Output (truncated): {output[:300]}\n\n"
+            f"Suggested improvement: Add specific guidance for {task_type} tasks "
+            f"to avoid: {modes}."
+        )
         await propose_skill_update(task_type, proposal)
-        log.info(f"Skill improvement proposed for {task_type} (score={score:.0f})")
+        log.info(f"Improvement proposed for {task_type}: score={score:.0f}, modes={modes}")

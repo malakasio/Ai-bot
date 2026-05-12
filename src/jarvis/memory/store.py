@@ -417,8 +417,8 @@ async def run_auto_dream(llm_call_fn):
     """
     log.info("autoDream starting memory consolidation...")
 
-    # Fetch recent unconsolidated episodic memories
-    cutoff = time.time() - 86400 * 7  # last 7 days
+    # Fetch recent unconsolidated episodic memories — last 24h as per blueprint
+    cutoff = time.time() - 86400
     episodes = await db_fetch_all(
         """SELECT id, content, created_at FROM memories
            WHERE memory_type='episodic' AND consolidated=0 AND created_at > ?

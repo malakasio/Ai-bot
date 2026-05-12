@@ -151,10 +151,13 @@ class MemoryConfig:
     similarity_threshold: float = 0.75
     raw_log_retention_days: int = 7
 
-    # Embedding model (free local via sentence-transformers)
-    embed_provider: str = field(default_factory=lambda: os.environ.get("EMBED_PROVIDER", "sentence-transformers"))
+    # Embedding model — auto-selects Jina (free cloud) if JINA_API_KEY is set
+    embed_provider: str = field(default_factory=lambda: os.environ.get(
+        "EMBED_PROVIDER",
+        "jina" if os.environ.get("JINA_API_KEY") else "sentence-transformers"
+    ))
     embed_model: str = field(default_factory=lambda: os.environ.get("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"))
-    embed_dim: int = int(os.environ.get("EMBED_DIM", "384"))
+    embed_dim: int = int(os.environ.get("EMBED_DIM", "1024" if os.environ.get("JINA_API_KEY") else "384"))
 
 
 @dataclass
