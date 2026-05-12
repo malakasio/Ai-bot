@@ -251,8 +251,10 @@ class AgentTeam:
                 continue
 
             log.info(f"Agent {agent.agent_id} picked up task {task['id'][:8]}")
+            payload = json.loads(task["payload"])
+            task_text = payload.get("text", str(payload)) if isinstance(payload, dict) else str(payload)
             result = await agent.run_task(
-                task=json.loads(task["payload"]),
+                task=task_text,
                 task_id=task["id"],
             )
 

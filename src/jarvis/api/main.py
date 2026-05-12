@@ -79,8 +79,11 @@ class LimitBodySize(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > self.MAX_BODY:
-            return Response("Request too large", status_code=413)
+        try:
+            if content_length and int(content_length) > self.MAX_BODY:
+                return Response("Request too large", status_code=413)
+        except ValueError:
+            return Response("Invalid Content-Length", status_code=400)
         return await call_next(request)
 
 
@@ -233,7 +236,7 @@ def create_app() -> FastAPI:
                 session_id=str(uuid.uuid4()),
             )
             await pipeline.initialize()
-        except ImportError:
+        except Exception:
             await ws.send_json({"type": "error", "message": "Voice models not available on this deployment. Use text chat instead."})
             await ws.close()
             return
@@ -407,9 +410,12 @@ def create_app() -> FastAPI:
         if not proposal:
             raise HTTPException(404, "Proposal not found")
 
-        # Append to SKILL.md
+        # Append to SKILL.md — path-traversal guard
         skill_name = proposal["skill_name"]
-        skill_file = Path(f".claude/skills/{skill_name}/SKILL.md")
+        skills_root = (Path(".claude/skills")).resolve()
+        skill_file = (skills_root / skill_name / "SKILL.md").resolve()
+        if not str(skill_file).startswith(str(skills_root)):
+            raise HTTPException(400, "Invalid skill_name")
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         with open(skill_file, "a") as f:
             f.write(f"\n\n## Auto-update {time.strftime('%Y-%m-%d')}\n{proposal['proposal']}\n")

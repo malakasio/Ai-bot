@@ -58,7 +58,10 @@ def _load_model():
 
     elif provider == "openai":
         import openai
-        _model = openai.AsyncOpenAI(api_key=cfg.llm.openai_api_key)
+        # Use the *sync* client — _embed_sync runs inside a ThreadPoolExecutor,
+        # which cannot drive an asyncio event loop. AsyncOpenAI would silently
+        # return before the coroutine completes, producing all-zero vectors.
+        _model = openai.OpenAI(api_key=cfg.llm.openai_api_key)
         _model_name = "text-embedding-3-small"
         _embed_dim = 1536
         log.info(f"Using OpenAI embeddings: {_model_name}")
@@ -96,7 +99,12 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
             results.append(resp.json()["embedding"])
         return results
 
-    return [[0.0] * _embed_dim for _ in texts]
+    elif provider == "openai":
+        # _model is openai.OpenAI (sync client) — safe to call from executor thread
+        response = _model.embeddings.create(input=texts, model=_model_name)
+        return [item.embedding for item in response.data]
+
+    raise ValueError(f"_embed_sync: unhandled provider '{provider}'")
 
 
 async def embed_texts(texts: list[str]) -> list[list[float]]:

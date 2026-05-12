@@ -168,10 +168,37 @@ async def tool_network_scan(target: str, scan_type: str = "ping") -> str:
     return stdout or stderr or "[No output]"
 
 
+_SSRF_BLOCKED_HOSTS = frozenset({
+    "localhost",
+    "169.254.169.254",       # AWS / GCP / Azure instance metadata
+    "metadata.google.internal",
+    "metadata.azure.internal",
+    "fd00:ec2::254",         # AWS IPv6 metadata
+})
+
+
+def _is_ssrf_url(url: str) -> bool:
+    """Return True if the URL targets a private or metadata endpoint."""
+    import ipaddress
+    import urllib.parse
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+        if host.lower() in _SSRF_BLOCKED_HOSTS:
+            return True
+        addr = ipaddress.ip_address(host)
+        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+    except ValueError:
+        pass  # not a bare IP — hostname is allowed
+    return False
+
+
 async def tool_http_request(url: str, method: str = "GET", headers: dict | None = None, body: str | None = None) -> str:
-    """HTTP request (lab mode allows non-whitelisted domains)."""
+    """HTTP request. Blocked for private/loopback/metadata addresses unless lab mode."""
     import aiohttp
     cfg = get_config()
+
+    if _is_ssrf_url(url) and not cfg.security.lab_mode:
+        return "[BLOCKED: requests to private/metadata addresses require JARVIS_LAB_MODE=true]"
 
     try:
         timeout = aiohttp.ClientTimeout(total=30)

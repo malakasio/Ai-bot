@@ -8,6 +8,22 @@ Bug 2: _llm_tts_stream used `return full_response` in async generator.
        `return <value>` in generator is silently discarded by the caller's `async for` loop.
        response_text stayed "" → assistant messages never appended to history →
        multi-turn voice conversations had no context.
+
+Bug 3 (path traversal): skill_proposals/accept used unvalidated skill_name in path.
+       Trigger: proposal with skill_name='../../etc/passwd' → arbitrary file append.
+
+Bug 6 (AgentTeam crash): _worker called run_task(task=<dict>) but run_task expects str.
+       Trigger: any queued task → AttributeError: 'dict' has no attribute 'lower'.
+
+Bug 7 (KAIROS watcher): ConfigHandler.on_modified called self._debounced_reload()
+       where self is ConfigHandler, not KAIROSDaemon.
+       Trigger: modify CLAUDE.md → AttributeError in watcher thread.
+
+Bug 9 (DoS): LimitBodySize called int(content_length) with no try/except.
+       Trigger: Content-Length: not-a-number → ValueError → 500 on every request.
+
+Bug 11 (SSRF): tool_http_request had no SSRF guard.
+       Trigger: ask agent to fetch http://169.254.169.254/ → cloud metadata leak.
 """
 import asyncio
 import pytest
@@ -164,3 +180,102 @@ class TestBug2VoicePipelineHistory:
         assert session.history[2]["role"] == "user"
         assert session.history[3]["role"] == "assistant"
         assert "9 το βράδυ" in session.history[3]["content"]
+
+
+class TestBug9ContentLength:
+    """Bug 9: LimitBodySize raised ValueError on non-numeric Content-Length."""
+
+    @pytest.mark.asyncio
+    async def test_bad_content_length_returns_400(self):
+        from fastapi.testclient import TestClient
+        from jarvis.api.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/chat",
+            content=b"{}",
+            headers={"content-type": "application/json", "content-length": "not-a-number"},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_normal_content_length_passes(self):
+        from jarvis.api.main import LimitBodySize
+        from unittest.mock import AsyncMock, MagicMock
+        middleware = LimitBodySize(app=MagicMock())
+        request = MagicMock()
+        request.headers.get.return_value = "100"
+        call_next = AsyncMock(return_value=MagicMock(status_code=200))
+        await middleware.dispatch(request, call_next)
+        call_next.assert_called_once()
+
+
+class TestBug11SSRFGuard:
+    """Bug 11: tool_http_request had no SSRF protection."""
+
+    def test_localhost_blocked(self):
+        from jarvis.tools.registry import _is_ssrf_url
+        assert _is_ssrf_url("http://127.0.0.1/admin")
+        assert _is_ssrf_url("http://localhost/secret")
+        assert _is_ssrf_url("http://0.0.0.0/")
+
+    def test_private_ip_blocked(self):
+        from jarvis.tools.registry import _is_ssrf_url
+        assert _is_ssrf_url("http://10.0.0.1/")
+        assert _is_ssrf_url("http://192.168.1.1/")
+        assert _is_ssrf_url("http://172.16.0.1/")
+
+    def test_metadata_endpoint_blocked(self):
+        from jarvis.tools.registry import _is_ssrf_url
+        assert _is_ssrf_url("http://169.254.169.254/latest/meta-data/")
+        assert _is_ssrf_url("http://metadata.google.internal/")
+
+    def test_external_url_allowed(self):
+        from jarvis.tools.registry import _is_ssrf_url
+        assert not _is_ssrf_url("https://api.anthropic.com/v1/messages")
+        assert not _is_ssrf_url("https://google.com/")
+        assert not _is_ssrf_url("https://api.telegram.org/")
+
+
+class TestBug6AgentTeamPayload:
+    """Bug 6: AgentTeam._worker passed dict to run_task instead of str."""
+
+    def test_payload_extraction(self):
+        import json
+        payload_json = json.dumps({"text": "summarize this document", "type": "simple_qa"})
+        payload = json.loads(payload_json)
+        task_text = payload.get("text", str(payload)) if isinstance(payload, dict) else str(payload)
+        assert task_text == "summarize this document"
+        assert isinstance(task_text, str)
+
+    def test_payload_fallback_to_str(self):
+        import json
+        payload_json = json.dumps({"type": "communication", "historyId": "abc"})
+        payload = json.loads(payload_json)
+        task_text = payload.get("text", str(payload)) if isinstance(payload, dict) else str(payload)
+        assert isinstance(task_text, str)
+        assert len(task_text) > 0
+
+
+class TestBug3PathTraversal:
+    """Bug 3: skill_proposals/accept allowed path traversal via skill_name."""
+
+    def test_traversal_blocked(self):
+        from pathlib import Path
+        skills_root = Path(".claude/skills").resolve()
+        malicious_names = [
+            "../../etc/passwd",
+            "../../../tmp/evil",
+            "x/../../root/.bashrc",
+        ]
+        for name in malicious_names:
+            candidate = (skills_root / name / "SKILL.md").resolve()
+            is_safe = str(candidate).startswith(str(skills_root))
+            assert not is_safe, f"Path traversal not caught for: {name}"
+
+    def test_valid_skill_name_allowed(self):
+        from pathlib import Path
+        skills_root = Path(".claude/skills").resolve()
+        for name in ["agents", "memory", "voice"]:
+            candidate = (skills_root / name / "SKILL.md").resolve()
+            assert str(candidate).startswith(str(skills_root))

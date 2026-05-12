@@ -147,12 +147,14 @@ class KAIROSDaemon:
 
             main_loop = asyncio.get_event_loop()
 
+            daemon_ref = self  # capture KAIROSDaemon, not the handler
+
             class ConfigHandler(FileSystemEventHandler):
                 def on_modified(self, event):
                     if any(event.src_path.endswith(f) for f in ["CLAUDE.md", "SKILL.md", ".env"]):
                         # v5 fix: asyncio.run_coroutine_threadsafe (not create_task from OS thread)
                         asyncio.run_coroutine_threadsafe(
-                            self._debounced_reload(), main_loop
+                            daemon_ref._debounced_reload(), main_loop
                         )
 
             observer = Observer()

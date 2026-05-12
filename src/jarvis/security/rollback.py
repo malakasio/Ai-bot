@@ -121,14 +121,17 @@ async def rollback_to_point(rp_id: str):
 
     log.warning(f"Rolling back to {rp_id}: {rp.description}")
 
-    # Restore git stash
+    # Restore git stash — apply the specific recorded stash hash
     if rp.git_stash:
         try:
-            subprocess.run(
-                ["git", "-C", workspace, "stash", "pop"],
+            result = subprocess.run(
+                ["git", "-C", workspace, "stash", "apply", rp.git_stash],
                 capture_output=True, text=True, timeout=30,
             )
-            log.info("Git stash restored")
+            if result.returncode != 0:
+                log.error(f"Git stash apply failed: {result.stderr.strip()}")
+            else:
+                log.info(f"Git stash {rp.git_stash[:12]} restored")
         except Exception as e:
             log.error(f"Git restore failed: {e}")
 
