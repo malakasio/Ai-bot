@@ -251,8 +251,14 @@ class AgentTeam:
                 continue
 
             log.info(f"Agent {agent.agent_id} picked up task {task['id'][:8]}")
+            payload = task["payload"]
+            try:
+                parsed = json.loads(payload)
+                task_text = parsed.get("text", str(parsed)) if isinstance(parsed, dict) else str(parsed)
+            except (json.JSONDecodeError, TypeError):
+                task_text = str(payload)
             result = await agent.run_task(
-                task=json.loads(task["payload"]),
+                task=task_text,
                 task_id=task["id"],
             )
 
@@ -270,7 +276,7 @@ class AgentTeam:
         from jarvis.memory.database import db_fetch_one
         # SQLite doesn't support SELECT FOR UPDATE, but single-writer pattern handles concurrency
         task = await db_fetch_one(
-            "SELECT * FROM tasks WHERE status='pending' ORDER BY priority ASC, created_at ASC LIMIT 1",
+            "SELECT * FROM tasks WHERE status='pending' ORDER BY priority DESC, created_at ASC LIMIT 1",
         )
         if not task:
             return None

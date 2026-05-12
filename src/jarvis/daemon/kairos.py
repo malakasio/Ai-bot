@@ -147,12 +147,13 @@ class KAIROSDaemon:
 
             main_loop = asyncio.get_event_loop()
 
+            daemon_self = self
+
             class ConfigHandler(FileSystemEventHandler):
                 def on_modified(self, event):
                     if any(event.src_path.endswith(f) for f in ["CLAUDE.md", "SKILL.md", ".env"]):
-                        # v5 fix: asyncio.run_coroutine_threadsafe (not create_task from OS thread)
                         asyncio.run_coroutine_threadsafe(
-                            self._debounced_reload(), main_loop
+                            daemon_self._debounced_reload(), main_loop
                         )
 
             observer = Observer()
@@ -214,7 +215,7 @@ class KAIROSDaemon:
         from jarvis.tools.registry import get_tools_for_set
 
         pending = await db_fetch_all(
-            "SELECT * FROM tasks WHERE status='pending' AND priority >= 4 ORDER BY created_at LIMIT 5"
+            "SELECT * FROM tasks WHERE status='pending' ORDER BY priority DESC, created_at LIMIT 5"
         )
 
         for task_row in pending:

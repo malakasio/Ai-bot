@@ -73,21 +73,21 @@ EXPECTED_OUTPUT_TOKENS: dict[TaskType, int] = {
     "embedding": 0,
 }
 
-# Tool sets per task type (v5 fix: pre-defined, not dynamic)
+# Tool sets per task type — names must match keys in tools/registry.py ALL_TOOLS
 TASK_TOOL_SETS: dict[TaskType, list[str]] = {
-    "code_review": ["filesystem", "git", "terminal"],
-    "code_generation": ["filesystem", "git", "terminal"],
-    "system_mgmt": ["filesystem", "terminal", "system"],
-    "monitoring": ["filesystem", "terminal"],
-    "analysis": ["filesystem", "web_search"],
-    "simple_qa": ["web_search"],
+    "code_review": ["read_file", "write_file", "list_dir", "bash", "web_search"],
+    "code_generation": ["read_file", "write_file", "list_dir", "bash"],
+    "system_mgmt": ["read_file", "write_file", "list_dir", "bash", "get_status"],
+    "monitoring": ["read_file", "list_dir", "bash", "get_status"],
+    "analysis": ["read_file", "list_dir", "web_search", "memory_search"],
+    "simple_qa": ["web_search", "memory_search", "get_status"],
     "voice": [],
-    "notification": ["telegram"],
-    "architecture": ["filesystem"],
-    "deep_debug": ["filesystem", "terminal", "git"],
-    "critical": ["filesystem", "terminal", "git"],
-    "lab": ["network", "filesystem", "terminal"],
-    "summarization": ["filesystem"],
+    "notification": [],
+    "architecture": ["read_file", "list_dir", "web_search"],
+    "deep_debug": ["read_file", "write_file", "list_dir", "bash"],
+    "critical": ["read_file", "write_file", "list_dir", "bash"],
+    "lab": ["network_scan", "http_request", "read_file", "bash"],
+    "summarization": ["read_file", "list_dir", "memory_search"],
     "embedding": [],
 }
 
