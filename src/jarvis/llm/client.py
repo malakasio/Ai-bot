@@ -419,6 +419,11 @@ async def run_agent(
             text = "".join(
                 b.text for b in response_obj.content if hasattr(b, "text") and b.type == "text"
             )
+            # Strip XML tool-call hallucinations (small models output <websearch> etc. as text)
+            import re as _re
+            text = _re.sub(r"<(websearch|memorysearch|getstatus|memory_search|web_search|python_exec|web_browse|memory_save|bash|read_file|write_file)[^>]*/?>.*?</\1>", "", text, flags=_re.S | _re.I)
+            text = _re.sub(r"<(websearch|memorysearch|getstatus|memory_search|web_search|python_exec|web_browse|memory_save|bash|read_file|write_file)[^/]*/?>", "", text, flags=_re.I)
+            text = text.strip()
             break
 
         if response_obj.stop_reason == "max_tokens":
