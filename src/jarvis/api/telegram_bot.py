@@ -636,6 +636,23 @@ async def start_telegram_bot():
 
     # ── Register all handlers ─────────────────────────────────────────────────
 
+    # ── /urgent — blueprint: Priority 1 task ─────────────────────────────────
+    @auth_required
+    async def cmd_urgent(update, context):
+        task_text = " ".join(context.args) if context.args else ""
+        if not task_text:
+            await send_safe(update.get_bot(), update.effective_chat.id, "Χρήση: `/urgent <εργασία>`")
+            return
+        from jarvis.memory.database import db_write
+        import uuid as _uuid
+        task_id = str(_uuid.uuid4())
+        await db_write(
+            "INSERT INTO tasks (id, task_type, payload, priority) VALUES (?,?,?,?)",
+            (task_id, "simple_qa", json.dumps({"text": task_text}), 1),
+        )
+        await send_safe(update.get_bot(), update.effective_chat.id, f"🚨 Urgent task queued: _{task_text[:100]}_")
+
+    app.add_handler(CommandHandler("urgent", cmd_urgent))
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("clear", cmd_clear))

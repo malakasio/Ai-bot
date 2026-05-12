@@ -21,19 +21,37 @@ from jarvis.llm.router import route, TASK_TOOL_SETS
 
 _CONVERSATIONAL_WORDS = frozenset([
     "γεια", "hello", "hi", "hey", "sup", "ok", "okay", "ωραία", "ωραιο",
-    "καλημέρα", "καλησπέρα", "καληνύχτα", "good morning", "good night",
-    "τι κάνεις", "πώς είσαι", "τι είσαι", "ευχαριστώ", "ευχαριστω",
-    "thanks", "thank you", "παρακαλώ", "bye", "αντιο", "αντίο",
-    "ναι", "όχι", "yes", "no", "sure", "σωστό", "σωστα", "τέλεια",
+    "καλημέρα", "καλησπέρα", "καληνύχτα", "good", "morning", "night",
+    "ευχαριστώ", "ευχαριστω", "thanks", "thank", "παρακαλώ",
+    "bye", "αντιο", "αντίο", "ναι", "όχι", "yes", "no", "sure",
+    "σωστό", "σωστα", "τέλεια", "εντάξει", "οκ",
+    # Social inquiry words (how are you, what time, what do you do)
+    "κάνεις", "είσαι", "ώρα", "πώς", "howdy",
+])
+
+# Words that mean the user wants an ACTION — always needs tools
+_ACTION_WORDS = frozenset([
+    "ψάξε", "βρες", "search", "find", "τρέξε", "run", "execute",
+    "δες", "look", "check", "πες", "tell", "εξήγησε", "explain",
+    "γράψε", "write", "φτιάξε", "make", "create", "δημιούργησε",
+    "υπολόγισε", "calculate", "compute", "ανάλυσε", "αναλύσε", "analyze",
+    "μεταφρασε", "translate", "σύνδεσε", "connect", "άνοιξε", "open",
+    "κλείσε", "close", "κατέβασε", "download", "ανέβασε", "upload",
+    "εγκατέστησε", "install", "ρώτα", "ask", "στείλε", "send",
+    "δείξε", "show", "πρόβλεψε", "predict", "σύγκρινε", "compare",
 ])
 
 
 def _is_conversational(text: str) -> bool:
-    """True for short greetings/responses that need no tools."""
+    """True only for pure social messages (greetings, acks) that need no tools."""
     t = text.lower().strip()
-    if len(t) <= 20:
-        return True
     words = set(t.split())
+    # Never conversational if action words present
+    if words & _ACTION_WORDS:
+        return False
+    # Must be a known social word OR very short (≤8 chars, no digits)
+    if len(t) <= 8 and not any(c.isdigit() for c in t):
+        return True
     return bool(words & _CONVERSATIONAL_WORDS)
 
 
@@ -401,16 +419,42 @@ class BaseAgent:
 
     async def _propose_improvement(self, task: str, output: str, score: float, task_type: str):
         """
-        Self-improvement: propose SKILL.md update with identified failure modes.
-        Human reviews via /skill_proposals in Telegram, then auto-applies.
+        Self-improvement Level 1 (blueprint):
+        - L1: SKILL.md append-only, automatic, no human approval needed
+        - L2: Proposals to DB for human review (more complex changes)
         """
         modes = ", ".join(self._last_failure_modes) if self._last_failure_modes else "quality below threshold"
+
+        # L1: Auto-apply to SKILL.md — only safe, append-only rule additions
+        if score < 50 or "tool_failure" in self._last_failure_modes:
+            await self._auto_update_skill(task_type, task, modes, score)
+
+        # L2: Store in DB for human review (complex improvements)
         proposal = (
             f"Score: {score:.0f}/100 | Failure modes: {modes}\n"
             f"Task: {task[:200]}\n"
             f"Output (truncated): {output[:300]}\n\n"
-            f"Suggested improvement: Add specific guidance for {task_type} tasks "
-            f"to avoid: {modes}."
+            f"Suggested: Add guidance for {task_type} tasks to avoid: {modes}."
         )
         await propose_skill_update(task_type, proposal)
-        log.info(f"Improvement proposed for {task_type}: score={score:.0f}, modes={modes}")
+        log.info(f"Improvement L1+L2 for {task_type}: score={score:.0f}, modes={modes}")
+
+    async def _auto_update_skill(self, task_type: str, task: str, modes: str, score: float):
+        """L1 self-improvement: append a lesson learned to the SKILL.md file directly."""
+        from pathlib import Path
+        import time as _time
+        skill_file = Path(f".claude/skills/{task_type}/SKILL.md")
+        try:
+            skill_file.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = _time.strftime("%Y-%m-%d %H:%M")
+            lesson = (
+                f"\n\n## Auto-learned {timestamp} (score={score:.0f})\n"
+                f"- Task pattern: {task[:100]}\n"
+                f"- Issue: {modes}\n"
+                f"- Rule: Be more careful with {task_type} tasks involving these patterns.\n"
+            )
+            with open(skill_file, "a") as f:
+                f.write(lesson)
+            log.info(f"L1: Auto-updated {skill_file}")
+        except Exception as e:
+            log.warning(f"L1 skill update failed: {e}")

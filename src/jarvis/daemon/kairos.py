@@ -210,7 +210,7 @@ class KAIROSDaemon:
         # 3. Send scheduled notifications
         await self._check_scheduled_notifications()
 
-        # 4. Daily briefing — once per day between 08:00–08:05
+        # 4. Daily briefing — once per day between 08:00–08:05 (user's timezone)
         now_local = datetime.fromtimestamp(time.time())
         if now_local.hour == 8 and now_local.minute < 5:
             last_brief_key = f"_last_briefing_{now_local.date()}"
@@ -221,6 +221,29 @@ class KAIROSDaemon:
                     await send_daily_briefing()
                 except Exception as e:
                     log.warning(f"Daily briefing error: {e}")
+
+        # 5. Weekly performance report (blueprint: score trends, improvements made)
+        if now_local.weekday() == 0 and now_local.hour == 9 and now_local.minute < 5:
+            last_report_key = f"_last_weekly_{now_local.date()}"
+            if not getattr(self, last_report_key, False):
+                setattr(self, last_report_key, True)
+                try:
+                    await self._send_weekly_report()
+                except Exception as e:
+                    log.warning(f"Weekly report error: {e}")
+
+        # 6. Budget alert at 80% of daily limit (blueprint requirement)
+        await self._check_budget_alert()
+
+        # 7. Proactive user model update (blueprint: deep user model)
+        if idle_time > 3600 and not getattr(self, "_last_user_model_update", False):
+            self._last_user_model_update = True
+            try:
+                await self._update_user_model()
+            except Exception as e:
+                log.debug(f"User model update: {e}")
+        elif idle_time < 300:
+            self._last_user_model_update = False
 
     async def _process_pending_tasks(self):
         """Check for pending background tasks."""
@@ -333,6 +356,99 @@ class KAIROSDaemon:
                 )
             except Exception as e:
                 log.error(f"Notification send failed: {e}")
+
+    async def _send_weekly_report(self):
+        """Blueprint: weekly performance report with score trends."""
+        from jarvis.memory.database import db_fetch_all
+        cfg = get_config()
+        if not cfg.telegram.enabled:
+            return
+
+        cutoff = time.time() - 7 * 86400
+        rows = await db_fetch_all(
+            "SELECT task_type, score, status FROM tasks WHERE created_at > ? AND score IS NOT NULL",
+            (cutoff,),
+        )
+        if not rows:
+            return
+
+        total = len(rows)
+        success = sum(1 for r in rows if r["status"] == "completed")
+        avg_score = sum(r["score"] for r in rows if r["score"]) / max(total, 1)
+
+        # Count L1 auto-improvements this week
+        skill_files = list(__import__("pathlib").Path(".claude/skills").rglob("SKILL.md")) if __import__("pathlib").Path(".claude/skills").exists() else []
+        improvements = sum(f.read_text().count("Auto-learned") for f in skill_files if f.exists())
+
+        report = (
+            f"📊 *Weekly Report — JARVIS*\n\n"
+            f"Tasks: {total} ({success} completed)\n"
+            f"Avg score: {avg_score:.0f}/100\n"
+            f"L1 auto-improvements: {improvements}\n"
+            f"{'✅ Good week' if avg_score >= 70 else '⚠️ Needs improvement'}"
+        )
+        await self._send_telegram(report)
+        log.info("Weekly report sent")
+
+    async def _check_budget_alert(self):
+        """Blueprint: alert at 80% of daily budget."""
+        try:
+            from jarvis.llm.client import _daily_cost_usd
+            cfg = get_config()
+            budget = cfg.llm.daily_token_budget * 0.000004
+            if budget <= 0:
+                return
+            pct = _daily_cost_usd / budget * 100
+            alert_key = f"_budget_alert_{__import__('time').strftime('%Y%m%d')}"
+            if pct >= 80 and not getattr(self, alert_key, False):
+                setattr(self, alert_key, True)
+                await self._send_telegram(
+                    f"⚠️ *Budget Alert*\n"
+                    f"Daily spend: ${_daily_cost_usd:.4f} ({pct:.0f}% of ${budget:.2f})\n"
+                    f"Switching to more efficient routing."
+                )
+        except Exception:
+            pass
+
+    async def _update_user_model(self):
+        """Blueprint: deep user model — extract patterns from episodic memories."""
+        from jarvis.memory.database import db_fetch_all, db_write
+        from jarvis.llm.client import simple_completion
+
+        cutoff = time.time() - 30 * 86400
+        episodes = await db_fetch_all(
+            "SELECT content FROM memories WHERE memory_type='episodic' AND created_at > ? "
+            "ORDER BY created_at DESC LIMIT 30",
+            (cutoff,),
+        )
+        if len(episodes) < 5:
+            return
+
+        batch = "\n".join(f"- {e['content'][:150]}" for e in episodes[:20])
+        prompt = (
+            f"Based on these recent interactions, identify:\n"
+            f"1. User's main interests and topics\n"
+            f"2. Preferred communication style\n"
+            f"3. Recurring needs or patterns\n"
+            f"4. Things the user cares about most\n\n"
+            f"Interactions:\n{batch}\n\n"
+            f"User profile (3-5 bullet points, concise):"
+        )
+
+        try:
+            profile = await simple_completion(prompt, task_type="analysis")
+            if profile and len(profile) > 50:
+                from jarvis.memory.store import save_memory
+                await save_memory(
+                    content=f"User profile (updated {__import__('time').strftime('%Y-%m-%d')}):\n{profile}",
+                    memory_type="semantic",
+                    importance=0.9,
+                    tags=["user_model", "profile"],
+                    source="kairos_user_model",
+                )
+                log.info("User model updated")
+        except Exception as e:
+            log.debug(f"User model LLM call: {e}")
 
     async def _send_telegram(self, text: str):
         """Send Telegram notification."""

@@ -299,6 +299,7 @@ async def run_agent(
 
     total_input_tokens = 0
     total_output_tokens = 0
+    _used_fallback = False  # prevent infinite fallback loops
 
     for iteration in range(max_iterations):
         call_start = time.time()
@@ -403,6 +404,22 @@ async def run_agent(
                             tools=tools if tools else [],
                         )
         except Exception as e:
+            # Blueprint resilience: provider unavailable → try next in chain
+            # Groq 5xx → Anthropic (if key set) → raise
+            err_str = str(e)
+            is_unavailable = any(x in err_str for x in ("502", "503", "504", "unavailable"))
+            if decision.provider == "groq" and is_unavailable and get_config().llm.has_anthropic and not _used_fallback:
+                _used_fallback = True
+                log.warning(f"Groq unavailable ({e}), switching to Anthropic")
+                decision = type(decision)(
+                    task_type=decision.task_type,
+                    tier="paid_fast",
+                    model=get_config().llm.haiku_model,
+                    provider="anthropic",
+                    reason="Groq fallback",
+                    expected_tokens=decision.expected_tokens,
+                )
+                continue
             metrics.llm_errors_total.inc()
             metrics.record_error()
             log.error(f"LLM call failed (iter {iteration}): {e}")

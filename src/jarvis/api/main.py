@@ -458,17 +458,32 @@ def create_app() -> FastAPI:
     async def submit_task(request: Request):
         body = await request.json()
         task_text = body.get("task", "")
-        priority = body.get("priority", 3)
+        priority = body.get("priority")
         if not task_text:
             raise HTTPException(400, "task required")
 
+        # Blueprint priority routing: auto-detect urgency from text
+        if priority is None:
+            tl = task_text.lower()
+            if any(w in tl for w in ["urgent", "επείγον", "asap", "τώρα", "αμέσως", "deadline"]):
+                priority = 1  # Urgent
+            elif any(w in tl for w in ["σημαντικό", "important", "σήμερα", "today"]):
+                priority = 2  # Important
+            elif any(w in tl for w in ["αργότερα", "later", "background", "παρασκήνιο"]):
+                priority = 4  # Background
+            else:
+                priority = 3  # Normal
+
         from jarvis.memory.database import db_write
+        from jarvis.llm.router import classify_task_by_keywords
+        task_type = classify_task_by_keywords(task_text)
         task_id = str(uuid.uuid4())
         await db_write(
             "INSERT INTO tasks (id, task_type, payload, priority) VALUES (?,?,?,?)",
-            (task_id, "simple_qa", json.dumps({"text": task_text}), priority),
+            (task_id, task_type, json.dumps({"text": task_text}), priority),
         )
-        return {"task_id": task_id, "status": "queued"}
+        priority_names = {1: "urgent", 2: "important", 3: "normal", 4: "background"}
+        return {"task_id": task_id, "status": "queued", "priority": priority_names.get(priority, "normal")}
 
     @app.get("/tasks/{task_id}")
     async def get_task(task_id: str):

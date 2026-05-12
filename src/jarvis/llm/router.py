@@ -137,6 +137,8 @@ def select_model(task_type: TaskType) -> RoutingDecision:
 
     expected_tokens = EXPECTED_OUTPUT_TOKENS.get(task_type, 1024)
 
+    # Resilience chain (blueprint: "Anthropic down = Jarvis dead" → fallback)
+    # Priority: Anthropic > Groq > Ollama (all configured providers tried in order)
     # Groq (FREE cloud) — use when available and no paid key configured
     if cfg.llm.has_groq and not cfg.llm.has_any_paid:
         model = (
