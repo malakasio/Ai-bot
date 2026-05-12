@@ -210,6 +210,18 @@ class KAIROSDaemon:
         # 3. Send scheduled notifications
         await self._check_scheduled_notifications()
 
+        # 4. Daily briefing — once per day between 08:00–08:05
+        now_local = datetime.fromtimestamp(time.time())
+        if now_local.hour == 8 and now_local.minute < 5:
+            last_brief_key = f"_last_briefing_{now_local.date()}"
+            if not getattr(self, last_brief_key, False):
+                setattr(self, last_brief_key, True)
+                try:
+                    from jarvis.api.telegram_bot import send_daily_briefing
+                    await send_daily_briefing()
+                except Exception as e:
+                    log.warning(f"Daily briefing error: {e}")
+
     async def _process_pending_tasks(self):
         """Check for pending background tasks."""
         from jarvis.memory.database import db_fetch_all

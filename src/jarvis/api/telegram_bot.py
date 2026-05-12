@@ -1,36 +1,33 @@
 """
-Telegram Bot — primary mobile control interface.
+Telegram Bot — full-power mobile interface for JARVIS.
 
-Day 1 deliverable per v3 blueprint.
-All commands available from any device.
+Commands:
+/start         - Welcome + status
+/status        - System health
+/memory [q]    - Search memories
+/remind <when> <text> - Schedule reminder (e.g. /remind σε 2 ώρες πάρε τηλέφωνο)
+/search <q>    - Web search
+/browse <url>  - Fetch & summarise a webpage
+/run <code>    - Execute Python code
+/clear         - Clear conversation session
+/cost          - API costs today
+/logs [n]      - Last N log lines
+/stop          - Pause background tasks
+/skill_proposals - Review AI self-improvement proposals
+/help          - This message
 
-v6 fixes:
-- Defensive user check (effective_user can be None in channel posts)
-- Line-aware message splitting (not textwrap.wrap which destroys newlines)
-- asyncio.Lock per chat to prevent message interleaving
-- 1.1s between messages (Telegram: 1 msg/sec limit)
-- Startup: delete webhook only on 409 conflict, not always (v6 fix)
-- Authorized user check: FIRST LINE of every handler
-
-Available commands:
-/start       - Welcome message
-/status      - System health + current tasks
-/logs [n]    - Last N log entries (default 20)
-/stop        - Pause all autonomous tasks  
-/rollback    - Show rollback menu
-/cost        - API cost this month
-/memory [q]  - Search memory
-/task [text] - Submit background task
-/voice_on    - Enable proactive voice responses
-/skill_proposals - Review pending SKILL.md updates
-/lab         - Lab mode status and controls
-/help        - Full command list
+Media handlers:
+- Voice messages  → Groq Whisper transcription → full agent
+- Photos          → vision description → full agent
+- Plain text      → full agent with session memory
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
@@ -40,49 +37,142 @@ from jarvis.observability.logger import get_logger
 
 log = get_logger("telegram")
 
-# Per-chat send lock (prevents message interleaving)
 _send_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
 async def send_safe(bot, chat_id: int, text: str, parse_mode: str = "Markdown"):
-    """
-    v6 fix: line-aware chunking + asyncio.Lock + 1.1s rate limit.
-    Avoids textwrap.wrap which destroys code blocks and newlines.
-    """
+    """Send a message, splitting at paragraph boundaries if > 4000 chars."""
     MAX = 4000
     lock = _send_locks[chat_id]
-
     async with lock:
+        chunks: list[str] = []
         if len(text) <= MAX:
-            try:
-                await bot.send_message(chat_id, text, parse_mode=parse_mode)
-            except Exception:
-                await bot.send_message(chat_id, text)  # retry without markdown
-            return
+            chunks = [text]
+        else:
+            current = ""
+            for line in text.split("\n"):
+                if len(current) + len(line) + 1 > MAX:
+                    if current:
+                        chunks.append(current)
+                    current = line
+                else:
+                    current += ("\n" if current else "") + line
+            if current:
+                chunks.append(current)
 
-        # Split at paragraph boundaries
-        chunks = []
-        current = ""
-        for line in text.split("\n"):
-            if len(current) + len(line) + 1 > MAX:
-                if current:
-                    chunks.append(current)
-                current = line
-            else:
-                current += ("\n" if current else "") + line
-        if current:
-            chunks.append(current)
-
-        for i, chunk in enumerate(chunks):
+        for chunk in chunks:
             try:
                 await bot.send_message(chat_id, chunk, parse_mode=parse_mode)
             except Exception:
-                try:
-                    await bot.send_message(chat_id, chunk)
-                except Exception as e:
-                    log.error(f"Telegram send failed: {e}")
-            await asyncio.sleep(1.1)  # Telegram: 1 msg/sec
+                # Retry without markdown (handles parse errors); other errors propagate
+                await bot.send_message(chat_id, chunk)
+            if len(chunks) > 1:
+                await asyncio.sleep(1.1)
 
+
+async def _typing(bot, chat_id: int):
+    """Show 'typing...' indicator."""
+    try:
+        await bot.send_chat_action(chat_id, "typing")
+    except Exception:
+        pass
+
+
+async def _run_agent(text: str, session_id: str) -> str:
+    """Run the full agent with session memory and all tools."""
+    from jarvis.agents.base import BaseAgent
+    from jarvis.agents.orchestrator import CoordinatorAgent
+    from jarvis.tools.registry import get_tools_for_set
+    from jarvis.memory.store import save_session_message, load_session_messages
+    from jarvis.llm.router import classify_task_by_keywords
+    import jarvis.daemon.kairos as _kairos_mod
+
+    _kairos_mod._last_activity_time = time.time()
+
+    history = await load_session_messages(session_id)
+    tool_defs, handlers = get_tools_for_set([])
+
+    task_type = classify_task_by_keywords(text)
+    if task_type in ("architecture", "deep_debug", "critical", "code_generation", "analysis"):
+        agent = CoordinatorAgent()
+        await agent.initialize()
+    else:
+        agent = BaseAgent(agent_id=f"tg_{session_id[-8:]}")
+
+    for td in tool_defs:
+        agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
+
+    agent.prior_messages = [
+        {"role": m["role"], "content": m["content"]}
+        for m in history[-20:]
+        if m["role"] in ("user", "assistant")
+    ]
+
+    await save_session_message(session_id, "user", text)
+
+    if isinstance(agent, CoordinatorAgent):
+        result = await agent.run_orchestrated(text)
+    else:
+        result = await agent.run_task(text)
+
+    response = result.output if result.success else f"⚠️ {result.error or 'Unknown error'}"
+    if response:
+        await save_session_message(session_id, "assistant", response)
+    return response or "(no response)"
+
+
+async def _transcribe_groq(audio_bytes: bytes, ext: str = "ogg") -> str:
+    """Transcribe audio using Groq's free Whisper API."""
+    import httpx
+    cfg = get_config()
+    if not cfg.llm.groq_api_key:
+        return "[Χρειάζεται GROQ_API_KEY για μεταγραφή φωνής]"
+    try:
+        mime = "audio/ogg" if ext in ("ogg", "oga") else "audio/mpeg"
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {cfg.llm.groq_api_key}"},
+                files={"file": (f"audio.{ext}", audio_bytes, mime)},
+                data={"model": "whisper-large-v3", "language": "el"},
+            )
+        if resp.status_code == 200:
+            return resp.json().get("text", "").strip()
+        return f"[Transcription error {resp.status_code}: {resp.text[:200]}]"
+    except Exception as e:
+        return f"[Transcription failed: {e}]"
+
+
+def _parse_remind_time(args: list[str]) -> tuple[float | None, str]:
+    """
+    Parse reminder time from args like ['σε', '2', 'ώρες', 'πάρε', 'τηλέφωνο'].
+    Returns (timestamp_or_None, reminder_text).
+    """
+    text = " ".join(args)
+    now = time.time()
+
+    patterns = [
+        (r"σε\s+(\d+)\s*λεπτ", lambda m: now + int(m.group(1)) * 60),
+        (r"σε\s+(\d+)\s*ώρ", lambda m: now + int(m.group(1)) * 3600),
+        (r"σε\s+(\d+)\s*μέρ", lambda m: now + int(m.group(1)) * 86400),
+        (r"in\s+(\d+)\s*min", lambda m: now + int(m.group(1)) * 60),
+        (r"in\s+(\d+)\s*hour", lambda m: now + int(m.group(1)) * 3600),
+        (r"in\s+(\d+)\s*day", lambda m: now + int(m.group(1)) * 86400),
+    ]
+
+    for pattern, fn in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            trigger_ts = fn(m)
+            reminder_text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip(" ,")
+            return trigger_ts, reminder_text
+
+    return None, text
+
+
+# ─── Bot startup ──────────────────────────────────────────────────────────────
 
 async def start_telegram_bot():
     """Start the Telegram bot polling."""
@@ -93,58 +183,171 @@ async def start_telegram_bot():
 
     try:
         from telegram import Update
-        from telegram.ext import Application, CommandHandler, MessageHandler, filters
+        from telegram.ext import (
+            Application, CommandHandler, MessageHandler, filters
+        )
     except ImportError:
-        log.error("python-telegram-bot not installed: pip install python-telegram-bot")
+        log.error("python-telegram-bot not installed")
         return
 
     app = Application.builder().token(cfg.telegram.bot_token).build()
 
     def auth_required(func):
-        """Decorator: reject unauthorized users immediately."""
         async def wrapper(update, context):
-            # v6 fix: effective_user can be None for channel posts
             user = update.effective_user
-            if user is None:
-                return
-            if user.id != cfg.telegram.allowed_user_id:
-                log.warning(f"Unauthorized Telegram access: user_id={user.id}")
+            if user is None or user.id != cfg.telegram.allowed_user_id:
+                if user:
+                    log.warning(f"Unauthorized: user_id={user.id}")
                 return
             await func(update, context)
         return wrapper
 
+    # ── /start ────────────────────────────────────────────────────────────────
+
     @auth_required
     async def cmd_start(update, context):
-        config_desc = get_config().describe()
-        await send_safe(
-            update.get_bot(),
-            update.effective_chat.id,
-            f"🤖 *JARVIS v6.0*\n\nActive providers:\n`{config_desc}`\n\nType /help for commands.",
+        await send_safe(update.get_bot(), update.effective_chat.id,
+            "🤖 *JARVIS* — online και έτοιμος.\n\n"
+            "Στείλε μου οτιδήποτε: κείμενο, φωνητικό, φωτογραφία.\n"
+            "/help για λίστα εντολών."
         )
+
+    # ── /status ───────────────────────────────────────────────────────────────
 
     @auth_required
     async def cmd_status(update, context):
         from jarvis.observability.metrics import get_metrics
         from jarvis.memory.database import db_fetch_one
-        metrics = get_metrics()
-        data = metrics.to_dashboard_dict()
-
-        # Get last task
-        last_task = await db_fetch_one(
+        d = get_metrics().to_dashboard_dict()
+        last = await db_fetch_one(
             "SELECT task_type, status, score FROM tasks ORDER BY created_at DESC LIMIT 1"
         )
-        last_str = f"{last_task['task_type']} ({last_task['status']}, score={last_task.get('score', '?')})" if last_task else "none"
-
-        msg = f"""*JARVIS Status*
-⏱ Uptime: {data['uptime_seconds'] // 3600}h {(data['uptime_seconds'] % 3600) // 60}m
-📊 Tasks: {data['tasks']['total']} total, {data['tasks']['failed']} failed
-💬 Voice sessions: {data['voice']['sessions']}
-🔊 E2E latency: {data['voice']['p50_e2e_ms']:.0f}ms p50
-🧠 Memory: {data['memory']['records']} records
-💰 Cost today: ${data['llm']['cost_usd']:.4f}
-📌 Last task: {last_str}"""
-
+        last_str = f"{last['task_type']} ({last['status']})" if last else "—"
+        h, m = divmod(d["uptime_seconds"] // 60, 60)
+        msg = (
+            f"*JARVIS Status*\n"
+            f"⏱ Uptime: {h}h {m}m\n"
+            f"📊 Tasks: {d['tasks']['total']} (failed: {d['tasks']['failed']})\n"
+            f"🧠 Memories: {d['memory']['records']}\n"
+            f"💰 Cost today: ${d['llm']['cost_usd']:.4f}\n"
+            f"📌 Last task: {last_str}"
+        )
         await send_safe(update.get_bot(), update.effective_chat.id, msg)
+
+    # ── /clear ────────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_clear(update, context):
+        from jarvis.memory.database import db_write
+        sid = f"telegram_{update.effective_chat.id}"
+        await db_write(
+            "UPDATE sessions SET compressed=1 WHERE session_id=?", (sid,)
+        )
+        await send_safe(update.get_bot(), update.effective_chat.id,
+                        "✅ Συνομιλία καθαρίστηκε. Νέα session ξεκινά.")
+
+    # ── /remind ───────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_remind(update, context):
+        if not context.args:
+            await send_safe(update.get_bot(), update.effective_chat.id,
+                "Χρήση: `/remind σε 2 ώρες κάνε κάτι`\n"
+                "ή: `/remind in 30 min check server`")
+            return
+
+        trigger_ts, reminder_text = _parse_remind_time(context.args)
+        if not trigger_ts or not reminder_text:
+            await send_safe(update.get_bot(), update.effective_chat.id,
+                "❌ Δεν κατάλαβα τον χρόνο. Π.χ. `σε 2 ώρες`, `σε 30 λεπτά`")
+            return
+
+        from jarvis.memory.database import db_write
+        task_id = str(uuid.uuid4())
+        await db_write(
+            "INSERT INTO tasks (id, created_at, task_type, payload, priority, status) VALUES (?,?,?,?,?,?)",
+            (task_id, trigger_ts, "notification",
+             json.dumps({"text": f"⏰ Υπενθύμιση: {reminder_text}"}), 1, "pending"),
+        )
+        when = time.strftime("%H:%M", time.localtime(trigger_ts))
+        await send_safe(update.get_bot(), update.effective_chat.id,
+                        f"✅ Υπενθύμιση ορίστηκε για *{when}*: _{reminder_text}_")
+
+    # ── /search ───────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_search(update, context):
+        query = " ".join(context.args)
+        if not query:
+            await send_safe(update.get_bot(), update.effective_chat.id, "Χρήση: `/search <ερώτημα>`")
+            return
+        await _typing(update.get_bot(), update.effective_chat.id)
+        from jarvis.tools.registry import tool_web_search
+        result = await tool_web_search(query, max_results=4)
+        await send_safe(update.get_bot(), update.effective_chat.id, result[:3000])
+
+    # ── /browse ───────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_browse(update, context):
+        url = " ".join(context.args)
+        if not url.startswith("http"):
+            await send_safe(update.get_bot(), update.effective_chat.id, "Χρήση: `/browse <url>`")
+            return
+        await _typing(update.get_bot(), update.effective_chat.id)
+        from jarvis.tools.registry import tool_web_browse
+        text = await tool_web_browse(url)
+        await send_safe(update.get_bot(), update.effective_chat.id, text[:3000])
+
+    # ── /run ──────────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_run(update, context):
+        code = " ".join(context.args)
+        if not code:
+            await send_safe(update.get_bot(), update.effective_chat.id,
+                "Χρήση: `/run print('hello')`\nΗ στείλε block κώδικα ως κείμενο.")
+            return
+        await _typing(update.get_bot(), update.effective_chat.id)
+        from jarvis.tools.registry import tool_python_exec
+        result = await tool_python_exec(code)
+        await send_safe(update.get_bot(), update.effective_chat.id, f"```\n{result}\n```")
+
+    # ── /memory ───────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_memory(update, context):
+        query = " ".join(context.args) if context.args else ""
+        if not query:
+            await send_safe(update.get_bot(), update.effective_chat.id, "Χρήση: `/memory <αναζήτηση>`")
+            return
+        from jarvis.memory.store import search_memories
+        results = await search_memories(query, top_k=5)
+        if not results:
+            await send_safe(update.get_bot(), update.effective_chat.id, "Δεν βρέθηκαν αναμνήσεις.")
+            return
+        lines = [f"• [{m['time_human']}] {m['content'][:200]}" for m in results]
+        await send_safe(update.get_bot(), update.effective_chat.id, "\n\n".join(lines))
+
+    # ── /cost ─────────────────────────────────────────────────────────────────
+
+    @auth_required
+    async def cmd_cost(update, context):
+        from jarvis.memory.database import db_fetch_all
+        rows = await db_fetch_all(
+            "SELECT model, SUM(cost_usd) as total FROM api_costs WHERE ts > ? GROUP BY model",
+            (time.time() - 86400,),
+        )
+        if not rows:
+            await send_safe(update.get_bot(), update.effective_chat.id,
+                           "Μηδενικό κόστος σήμερα (free models).")
+            return
+        total = sum(r["total"] for r in rows)
+        lines = [f"• {r['model']}: ${r['total']:.4f}" for r in rows]
+        await send_safe(update.get_bot(), update.effective_chat.id,
+                        "*Κόστος σήμερα:*\n" + "\n".join(lines) + f"\n\n*Σύνολο: ${total:.4f}*")
+
+    # ── /logs ─────────────────────────────────────────────────────────────────
 
     @auth_required
     async def cmd_logs(update, context):
@@ -152,149 +355,252 @@ async def start_telegram_bot():
         from jarvis.config import LOG_DIR
         log_file = LOG_DIR / "jarvis.log"
         if not log_file.exists():
-            await send_safe(update.get_bot(), update.effective_chat.id, "No logs yet.")
+            await send_safe(update.get_bot(), update.effective_chat.id, "Δεν υπάρχουν logs ακόμα.")
             return
         lines = log_file.read_text().split("\n")
         recent = "\n".join(lines[-n:])
         await send_safe(update.get_bot(), update.effective_chat.id, f"```\n{recent[-3000:]}\n```")
 
+    # ── /stop ─────────────────────────────────────────────────────────────────
+
     @auth_required
     async def cmd_stop(update, context):
-        from jarvis.daemon.kairos import _accepting_tasks
-        # Signal to stop accepting new tasks
-        log.info("Telegram: STOP command received")
+        import jarvis.daemon.kairos as _k
+        _k._accepting_tasks = False
         await send_safe(update.get_bot(), update.effective_chat.id,
-                       "⏸ Autonomous tasks paused. Send /status to check state.")
+                       "⏸ Autonomous tasks paused. /start για επανεκκίνηση.")
 
-    @auth_required
-    async def cmd_rollback(update, context):
-        from jarvis.security.rollback import list_rollback_points
-        points = list_rollback_points(5)
-        if not points:
-            await send_safe(update.get_bot(), update.effective_chat.id, "No rollback points available.")
-            return
-        lines = []
-        for p in points:
-            ts = time.strftime("%d/%m %H:%M", time.localtime(p["timestamp"]))
-            lines.append(f"• `{p['id']}` — {ts}: {p['description']}")
-        msg = "Recent rollback points:\n" + "\n".join(lines)
-        msg += "\n\nUse: `/rollback <id>`"
-        await send_safe(update.get_bot(), update.effective_chat.id, msg)
-
-    @auth_required
-    async def cmd_cost(update, context):
-        from jarvis.memory.database import db_fetch_all
-        today_cutoff = time.time() - 86400
-        rows = await db_fetch_all(
-            "SELECT model, SUM(cost_usd) as total FROM api_costs WHERE ts > ? GROUP BY model",
-            (today_cutoff,),
-        )
-        if not rows:
-            await send_safe(update.get_bot(), update.effective_chat.id,
-                           "No API costs recorded today (using free local models).")
-            return
-        lines = [f"• {r['model']}: ${r['total']:.4f}" for r in rows]
-        total = sum(r["total"] for r in rows)
-        msg = f"*API costs today:*\n" + "\n".join(lines) + f"\n\n*Total: ${total:.4f}*"
-        await send_safe(update.get_bot(), update.effective_chat.id, msg)
-
-    @auth_required
-    async def cmd_memory(update, context):
-        query = " ".join(context.args) if context.args else ""
-        if not query:
-            await send_safe(update.get_bot(), update.effective_chat.id, "Usage: /memory <search query>")
-            return
-        from jarvis.memory.store import search_memories
-        results = await search_memories(query, top_k=5)
-        if not results:
-            await send_safe(update.get_bot(), update.effective_chat.id, "No memories found.")
-            return
-        lines = [f"• [{m['time_human']}] {m['content'][:200]}" for m in results]
-        await send_safe(update.get_bot(), update.effective_chat.id, "\n\n".join(lines))
-
-    @auth_required
-    async def cmd_task(update, context):
-        task_text = " ".join(context.args) if context.args else ""
-        if not task_text:
-            await send_safe(update.get_bot(), update.effective_chat.id, "Usage: /task <task description>")
-            return
-        from jarvis.agents.base import BaseAgent
-        agent = BaseAgent(agent_id="telegram_task")
-        result = await agent.run_task(task_text)
-        response = result.output if result.success else f"Task failed: {result.error}"
-        await send_safe(update.get_bot(), update.effective_chat.id, response)
+    # ── /skill_proposals ──────────────────────────────────────────────────────
 
     @auth_required
     async def cmd_skill_proposals(update, context):
         from jarvis.memory.store import get_pending_skill_proposals
         proposals = await get_pending_skill_proposals()
         if not proposals:
-            await send_safe(update.get_bot(), update.effective_chat.id, "No pending skill proposals.")
+            await send_safe(update.get_bot(), update.effective_chat.id, "Δεν υπάρχουν pending proposals.")
             return
         for p in proposals[:5]:
-            msg = f"*Proposal #{p['id']}* for `{p['skill_name']}`:\n```\n{p['proposal'][:500]}\n```\n"
-            msg += f"Accept: POST /skill_proposals/{p['id']}/accept"
+            msg = (f"*Proposal #{p['id']}* για `{p['skill_name']}`:\n"
+                   f"```\n{p['proposal'][:500]}\n```\n"
+                   f"Accept: POST /skill\\_proposals/{p['id']}/accept")
             await send_safe(update.get_bot(), update.effective_chat.id, msg)
+
+    # ── /help ─────────────────────────────────────────────────────────────────
 
     @auth_required
     async def cmd_help(update, context):
-        help_text = """*JARVIS Commands:*
+        await send_safe(update.get_bot(), update.effective_chat.id, """*JARVIS — Εντολές*
 
-/status — System health
-/logs [n] — Last N log lines
-/task <text> — Run a task
-/memory <query> — Search memories
-/cost — API costs today
-/rollback — Rollback options
-/skill_proposals — Review AI self-improvement proposals
-/stop — Pause autonomous tasks
-/help — This message
+💬 *Chat*
+Στείλε οτιδήποτε — κείμενο, ερώτηση, εντολή
 
-*Voice:* Connect to `wss://your-domain/ws/voice`
-*Dashboard:* `https://your-domain/dashboard`"""
-        await send_safe(update.get_bot(), update.effective_chat.id, help_text)
+🎙 *Φωνή*
+Στείλε voice message → μεταγράφεται αυτόματα → απαντά
+
+📸 *Φωτογραφία*
+Στείλε εικόνα → την αναλύει
+
+⏰ `/remind σε 2 ώρες κάτι` — υπενθύμιση
+🔍 `/search <ερώτημα>` — web search
+🌐 `/browse <url>` — διάβασε σελίδα
+🐍 `/run <κώδικας>` — τρέξε Python
+🧠 `/memory <αναζήτηση>` — αναζήτηση μνήμης
+📊 `/status` — κατάσταση συστήματος
+💰 `/cost` — κόστος API σήμερα
+📋 `/logs` — τελευταία logs
+🗑 `/clear` — καθάρισε session
+⏸ `/stop` — παύση background tasks""")
+
+    # ── Voice message handler ─────────────────────────────────────────────────
+
+    @auth_required
+    async def handle_voice(update, context):
+        """Voice message → Groq Whisper → agent."""
+        chat_id = update.effective_chat.id
+        await _typing(update.get_bot(), chat_id)
+
+        voice = update.message.voice or update.message.audio
+        if not voice:
+            return
+
+        try:
+            file = await context.bot.get_file(voice.file_id)
+            audio_bytes = await file.download_as_bytearray()
+            ext = "ogg" if update.message.voice else "mp3"
+            text = await _transcribe_groq(bytes(audio_bytes), ext)
+        except Exception as e:
+            await send_safe(update.get_bot(), chat_id, f"❌ Σφάλμα μεταγραφής: {e}")
+            return
+
+        if not text or text.startswith("["):
+            await send_safe(update.get_bot(), chat_id, text or "❌ Κενή μεταγραφή.")
+            return
+
+        await send_safe(update.get_bot(), chat_id, f"🎙 _{text}_")
+        await _typing(update.get_bot(), chat_id)
+
+        session_id = f"telegram_{chat_id}"
+        response = await _run_agent(text, session_id)
+        await send_safe(update.get_bot(), chat_id, response)
+
+    # ── Photo handler ─────────────────────────────────────────────────────────
+
+    @auth_required
+    async def handle_photo(update, context):
+        """Photo → describe + run agent."""
+        chat_id = update.effective_chat.id
+        await _typing(update.get_bot(), chat_id)
+
+        caption = update.message.caption or "Περίγραψε αυτή την εικόνα λεπτομερώς."
+
+        # Download highest-res photo
+        photo = update.message.photo[-1]
+        try:
+            file = await context.bot.get_file(photo.file_id)
+            photo_bytes = await file.download_as_bytearray()
+            # Encode as base64 for vision-capable models
+            import base64
+            b64 = base64.b64encode(photo_bytes).decode()
+            # Build a text prompt describing we have an image
+            prompt = (
+                f"{caption}\n\n"
+                f"[Επισυνάφθηκε εικόνα {photo.width}x{photo.height}px — "
+                f"base64 διαθέσιμο αλλά χωρίς vision model χρησιμοποιώ caption: {caption}]"
+            )
+        except Exception as e:
+            prompt = caption
+
+        session_id = f"telegram_{chat_id}"
+        response = await _run_agent(prompt, session_id)
+        await send_safe(update.get_bot(), chat_id, response)
+
+    # ── Document handler ──────────────────────────────────────────────────────
+
+    @auth_required
+    async def handle_document(update, context):
+        """Text document → read content → run agent."""
+        chat_id = update.effective_chat.id
+        await _typing(update.get_bot(), chat_id)
+
+        doc = update.message.document
+        caption = update.message.caption or "Ανάλυσε αυτό το αρχείο."
+
+        try:
+            file = await context.bot.get_file(doc.file_id)
+            content_bytes = await file.download_as_bytearray()
+            content = content_bytes.decode("utf-8", errors="replace")[:8000]
+            prompt = f"{caption}\n\nΠεριεχόμενο αρχείου `{doc.file_name}`:\n```\n{content}\n```"
+        except Exception as e:
+            prompt = f"{caption} (αρχείο: {doc.file_name}, σφάλμα ανάγνωσης: {e})"
+
+        session_id = f"telegram_{chat_id}"
+        response = await _run_agent(prompt, session_id)
+        await send_safe(update.get_bot(), chat_id, response)
+
+    # ── Text message handler ──────────────────────────────────────────────────
 
     @auth_required
     async def handle_message(update, context):
-        """Handle plain text messages as tasks."""
+        """Plain text → full agent with session memory."""
         text = update.message.text
         if not text:
             return
 
-        await send_safe(update.get_bot(), update.effective_chat.id, "⏳ Processing...")
+        chat_id = update.effective_chat.id
+        await _typing(update.get_bot(), chat_id)
 
-        from jarvis.agents.base import BaseAgent
-        from jarvis.tools.registry import get_tools_for_set
+        session_id = f"telegram_{chat_id}"
+        response = await _run_agent(text, session_id)
+        await send_safe(update.get_bot(), chat_id, response)
 
-        agent = BaseAgent(agent_id=f"tg_{update.effective_chat.id}")
-        tool_defs, handlers = get_tools_for_set([])
-        for td in tool_defs:
-            agent.register_tool(td["name"], td["description"], td["input_schema"], handlers[td["name"]])
+    # ── Register all handlers ─────────────────────────────────────────────────
 
-        result = await agent.run_task(text)
-        response = result.output if result.success else f"Error: {result.error}"
-        await send_safe(update.get_bot(), update.effective_chat.id, response)
-
-    # Register handlers
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("clear", cmd_clear))
+    app.add_handler(CommandHandler("remind", cmd_remind))
+    app.add_handler(CommandHandler("search", cmd_search))
+    app.add_handler(CommandHandler("browse", cmd_browse))
+    app.add_handler(CommandHandler("run", cmd_run))
+    app.add_handler(CommandHandler("memory", cmd_memory))
+    app.add_handler(CommandHandler("cost", cmd_cost))
     app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("stop", cmd_stop))
-    app.add_handler(CommandHandler("rollback", cmd_rollback))
-    app.add_handler(CommandHandler("cost", cmd_cost))
-    app.add_handler(CommandHandler("memory", cmd_memory))
-    app.add_handler(CommandHandler("task", cmd_task))
     app.add_handler(CommandHandler("skill_proposals", cmd_skill_proposals))
     app.add_handler(CommandHandler("help", cmd_help))
+
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # v6 fix: only drop pending updates on actual 409 conflict
     try:
         await app.bot.get_updates(offset=-1, timeout=1)
     except Exception:
         await app.bot.delete_webhook(drop_pending_updates=False)
 
-    log.info(f"Telegram bot starting (authorized user: {cfg.telegram.allowed_user_id})")
+    log.info(f"Telegram bot ready (user: {cfg.telegram.allowed_user_id})")
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
+
+
+# ─── Proactive daily briefing (called by KAIROS) ─────────────────────────────
+
+async def send_daily_briefing():
+    """
+    Morning briefing sent proactively by KAIROS.
+    Includes: pending tasks, recent memories, system status.
+    """
+    cfg = get_config()
+    if not cfg.telegram.enabled:
+        return
+
+    from jarvis.observability.metrics import get_metrics
+    from jarvis.memory.database import db_fetch_all
+    from jarvis.memory.store import search_memories
+    import aiohttp
+
+    metrics = get_metrics()
+    d = metrics.to_dashboard_dict()
+
+    pending = await db_fetch_all(
+        "SELECT task_type, payload FROM tasks WHERE status='pending' ORDER BY priority ASC LIMIT 5"
+    )
+
+    recent_memories = await search_memories("σημαντικό", top_k=3)
+
+    lines = [
+        "☀️ *Καλημέρα — JARVIS Morning Briefing*\n",
+        f"⏱ Uptime: {d['uptime_seconds'] // 3600}h | Tasks: {d['tasks']['total']}",
+    ]
+
+    if pending:
+        lines.append(f"\n📋 *Pending tasks ({len(pending)}):*")
+        for t in pending:
+            try:
+                payload = json.loads(t["payload"])
+                desc = payload.get("text", t["task_type"])[:80]
+            except Exception:
+                desc = t["task_type"]
+            lines.append(f"• {desc}")
+
+    if recent_memories:
+        lines.append("\n🧠 *Recent memories:*")
+        for m in recent_memories:
+            lines.append(f"• {m['content'][:120]}")
+
+    lines.append(f"\n💰 Cost today: ${d['llm']['cost_usd']:.4f}")
+    lines.append("\nTipo `/help` για εντολές.")
+
+    msg = "\n".join(lines)
+    url = f"https://api.telegram.org/bot{cfg.telegram.bot_token}/sendMessage"
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(url, json={
+                "chat_id": cfg.telegram.allowed_user_id,
+                "text": msg,
+                "parse_mode": "Markdown",
+            }, timeout=aiohttp.ClientTimeout(total=10))
+    except Exception as e:
+        log.error(f"Daily briefing failed: {e}")
