@@ -1,3 +1,4 @@
+# Updated by Termux Agent
 """Root-level entry point for Railway/Railpack auto-detection."""
 import sys
 import os
