@@ -1,6 +1,6 @@
 {
-  "apiEndpoint": "https://openrouter.ai",
-  "openRouterApiKey": "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",
+  "apiEndpoint": "",
+  "openRouterApiKey": "",
   "anthropicApiKey": "none",
   "primaryModel": "qwen/qwen3-coder-next",
   "fastModel": "qwen/qwen3-coder-next",
