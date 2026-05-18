@@ -1,0 +1,11 @@
+PyMuPDF
+python-mss
+pyautogui
+openai
+google-generativeai
+openwakeword
+sqlcipher3
+cryptography
+httpx[asyncio]
+pytest-asyncio
+pytest-httpx

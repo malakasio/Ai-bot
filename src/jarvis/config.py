@@ -26,7 +26,7 @@ WORKSPACE_DIR = JARVIS_HOME / "workspace"
 
 DB_PATH = DATA_DIR / "jarvis.db"
 AUDIT_LOG_PATH = LOG_DIR / "audit.jsonl"
-SESSION_SECRET_FILE = Path("/etc/jarvis/session_secret")
+SESSION_SECRET_FILE = JARVIS_HOME / "session_secret"
 
 
 def _ensure_dirs():
