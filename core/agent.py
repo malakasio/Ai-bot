@@ -498,26 +498,43 @@ async def execute_mcp_tool(name: str, tool_input: dict[str, Any]) -> Any:
                     "and JARVIS_REQUIRE_SNAPSHOT=true"
                 )
 
-    t0 = time.monotonic()
+    # Instrument with the observability layer (OTel span + trace events).
     try:
-        result = await handler(tool_input)
-        log.info("mcp.tool.ok", extra={
-            "tool": name,
-            "duration_ms": int((time.monotonic() - t0) * 1000),
-            "snapshot": snapshot_tag,
-        })
-        # Decorate the result with the rollback tag when applicable.
-        if snapshot_tag and isinstance(result, dict):
-            result = {**result, "_snapshot": snapshot_tag}
-        return result
-    except Exception as e:
-        log.error("mcp.tool.fail", extra={
-            "tool": name,
-            "duration_ms": int((time.monotonic() - t0) * 1000),
-            "exc": repr(e),
-            "snapshot": snapshot_tag,
-        })
-        raise
+        from observability import tracing as _otrace
+        _tool_ctx = _otrace.instrument_tool_call(
+            tool=name,
+            is_destructive=is_destructive(name),
+            snapshot_tag=snapshot_tag,
+        )
+    except Exception:
+        # Observability missing? Fall back to a no-op context.
+        import contextlib as _ctx
+        @_ctx.contextmanager
+        def _noop_tool():
+            yield {}
+        _tool_ctx = _noop_tool()
+
+    t0 = time.monotonic()
+    with _tool_ctx as _:
+        try:
+            result = await handler(tool_input)
+            log.info("mcp.tool.ok", extra={
+                "tool": name,
+                "duration_ms": int((time.monotonic() - t0) * 1000),
+                "snapshot": snapshot_tag,
+            })
+            # Decorate the result with the rollback tag when applicable.
+            if snapshot_tag and isinstance(result, dict):
+                result = {**result, "_snapshot": snapshot_tag}
+            return result
+        except Exception as e:
+            log.error("mcp.tool.fail", extra={
+                "tool": name,
+                "duration_ms": int((time.monotonic() - t0) * 1000),
+                "exc": repr(e),
+                "snapshot": snapshot_tag,
+            })
+            raise
 
 
 # ─── LLM call ─────────────────────────────────────────────────────────────
@@ -615,15 +632,42 @@ async def run_jarvis_core(
             "estimated_input_tokens": est,
         })
 
+        # Observability: open an LLM span+event around the retried call.
         try:
-            response = await _llm_call(
-                client,
+            from observability import tracing as _otrace
+            _llm_ctx = _otrace.instrument_llm_call(
                 model=model,
-                system=system,
-                messages=messages,
-                tools=tools,
-                max_tokens=max_output_tokens,
+                run_id=run.run_id,
+                iteration=run.iterations,
+                estimated_input_tokens=est,
             )
+        except Exception:
+            import contextlib as _ctx
+            @_ctx.contextmanager
+            def _noop_llm():
+                yield {}
+            _llm_ctx = _noop_llm()
+
+        try:
+            with _llm_ctx as _llm_record:
+                response = await _llm_call(
+                    client,
+                    model=model,
+                    system=system,
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=max_output_tokens,
+                )
+                # Best-effort token usage capture for the trace.
+                try:
+                    usage = getattr(response, "usage", None)
+                    if usage is not None:
+                        _llm_record["input_tokens"] = getattr(
+                            usage, "input_tokens", None)
+                        _llm_record["output_tokens"] = getattr(
+                            usage, "output_tokens", None)
+                except Exception:
+                    pass
             run.breaker.record_success()
         except Exception as e:
             run.breaker.record_failure()
