@@ -3,16 +3,23 @@ services:
     name: jarvis
     runtime: docker
     plan: free
-    healthCheckPath: /health
+    healthCheckPath: /healthz
     envVars:
       - key: JARVIS_HOME
-        value: /app/jarvis_data
+        value: /var/lib/jarvis
       - key: JARVIS_HOST
         value: 0.0.0.0
-      - key: JARVIS_PORT
-        value: "8080"
+      # Render injects PORT automatically. Don't override it here; the
+      # Dockerfile CMD honors ${PORT:-8000} so the container listens on
+      # whatever Render assigns.
       - key: USER_TIMEZONE
         value: Europe/Athens
+      # PaaS-safe defaults: dry-run the Sentinel so it doesn't try to
+      # touch iptables / /var/log/auth.log inside a managed container.
+      - key: JARVIS_SENTINEL_DRY_RUN
+        value: "true"
+      - key: KAIROS_DRY_RUN
+        value: "true"
       - key: GROQ_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN

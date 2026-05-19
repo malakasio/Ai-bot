@@ -51,9 +51,15 @@ RUN mkdir -p /var/lib/jarvis /var/log/jarvis /tmp/jarvis \
 
 EXPOSE 8000
 
+# Docker HEALTHCHECK runs INSIDE the container, so it must hit whatever
+# port uvicorn is listening on. PaaS platforms inject $PORT — Railway,
+# Render, Fly — so we honor it here too.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/healthz" || exit 1
 
 # Run via the integrated FastAPI app. main.py loads agent + sentinel
 # + KAIROS + voice WS + observability dashboard via the lifespan hook.
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so ${PORT:-8000} expands at container start: PaaS
+# platforms inject $PORT and we must listen on it or the health probe
+# never connects.
+CMD exec python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}

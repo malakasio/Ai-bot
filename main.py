@@ -227,12 +227,36 @@ def create_app() -> Any:
         STATE.started_at = time.time()
         log.info("main.lifespan.start")
 
-        # 1) Register MCP tools into the agent
-        n, errs = _register_mcp_tools_into_agent()
-        STATE.mcp_tools_count = n
-        STATE.mcp_errors = errs
+        # PaaS detection — Railway / Render / Fly all inject $PORT. When
+        # we're on a managed platform we don't have iptables, auth.log,
+        # or systemd, so default the Sentinel to dry-run instead of
+        # crash-looping. The operator can still flip JARVIS_SENTINEL_DRY_RUN=false
+        # explicitly to opt in.
+        _on_paas = bool(
+            os.environ.get("PORT")
+            or os.environ.get("RAILWAY_ENVIRONMENT")
+            or os.environ.get("RENDER")
+            or os.environ.get("FLY_APP_NAME")
+        )
+        if _on_paas and "JARVIS_SENTINEL_DRY_RUN" not in os.environ:
+            os.environ["JARVIS_SENTINEL_DRY_RUN"] = "true"
 
-        # 2) Start KAIROS (if enabled)
+        # 1) Register MCP tools into the agent — wrapped because we
+        # MUST NOT prevent the HTTP surface from coming up. Any MCP
+        # failure ends up in STATE.mcp_errors and surfaces via /healthz.
+        try:
+            n, errs = _register_mcp_tools_into_agent()
+            STATE.mcp_tools_count = n
+            STATE.mcp_errors = errs
+        except Exception as e:  # noqa: BLE001
+            STATE.mcp_tools_count = 0
+            STATE.mcp_errors = [f"register_mcp_tools_into_agent crashed: {e!r}"]
+            log.exception("main.lifespan.mcp_init_failed",
+                          extra={"exc": repr(e)})
+
+        # 2) Start KAIROS (if enabled). On PaaS, KAIROS_ENABLED can be
+        # turned off via env to save resources — otherwise it runs and
+        # the supervisor restarts it on crash with exp. backoff.
         if os.environ.get("KAIROS_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
             sup = _Supervisor("kairos", _run_kairos)
             STATE.supervisors["kairos"] = sup
@@ -261,9 +285,21 @@ def create_app() -> Any:
     )
 
     # ── Health / readiness ────────────────────────────────────────────────
+    #
+    # /health and /healthz are intentionally permissive — they return 200
+    # as long as the FastAPI process is serving. PaaS health probes
+    # (Railway, Render, Fly, Kubernetes) need a route that says "the
+    # container is alive and listening" without depending on every
+    # downstream (DB, daemons) being warm yet.
+    #
+    # For "is everything ready for traffic?" use /readyz, which actually
+    # gates on daemon status and DB reachability.
+    #
+    # Both /health and /healthz exist because PaaS conventions disagree:
+    # Railway/Render templates default to /health, Kubernetes idiomatic
+    # is /healthz. Aliasing both costs us nothing and removes a footgun.
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, Any]:
+    async def _healthz_body() -> dict[str, Any]:
         return {
             "ok": True,
             "uptime_s": int(time.time() - STATE.started_at) if STATE.started_at else 0,
@@ -271,6 +307,15 @@ def create_app() -> Any:
             "mcp_errors": STATE.mcp_errors,
             "daemons": {n: s.status() for n, s in STATE.supervisors.items()},
         }
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, Any]:
+        return await _healthz_body()
+
+    @app.get("/health")
+    async def health() -> dict[str, Any]:
+        # Alias for PaaS probes that default to /health (Railway, Render).
+        return await _healthz_body()
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:

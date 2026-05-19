@@ -105,6 +105,9 @@ class TestMainApp:
         # Routes we promised in the docstring.
         routes = {getattr(r, "path", None) for r in main.app.routes}
         assert "/healthz" in routes
+        # PaaS probes (Railway/Render default) hit /health, not /healthz.
+        # Regression: /health must be aliased.
+        assert "/health" in routes
         assert "/readyz" in routes
         assert "/agent/run" in routes
         assert "/mcp/tools" in routes
@@ -220,6 +223,25 @@ class TestHealthz:
             assert body["ok"] is True
             assert "daemons" in body
             assert "mcp_tools" in body
+
+    def test_health_alias_returns_ok(self):
+        """Regression: PaaS health probes hit /health (Railway/Render default).
+
+        The original deploy failed because /health 404'd while /healthz
+        worked. Both must return the same body now.
+        """
+        try:
+            from fastapi.testclient import TestClient
+        except Exception:
+            pytest.skip("fastapi[testclient] not installed")
+        import main
+        with TestClient(main.app) as client:
+            r1 = client.get("/health")
+            r2 = client.get("/healthz")
+            assert r1.status_code == 200
+            assert r2.status_code == 200
+            assert r1.json().keys() == r2.json().keys()
+            assert r1.json()["ok"] is True
 
     def test_mcp_tools_endpoint(self):
         try:
