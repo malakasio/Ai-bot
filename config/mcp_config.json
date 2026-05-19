@@ -1,0 +1,72 @@
+{
+  "$schema": "./mcp_config.schema.json",
+  "version": 1,
+  "description": "JARVIS v7.0 MCP server registry. The router loads enabled entries, imports each module, and calls its get_server() factory.",
+  "defaults": {
+    "request_timeout_s": 30
+  },
+  "servers": [
+    {
+      "name": "filesystem",
+      "enabled": true,
+      "module": "mcp.filesystem_mcp",
+      "description": "Safe read/write filesystem access bounded by JARVIS_FS_ALLOWED_ROOTS.",
+      "env_passthrough": [
+        "HOME",
+        "JARVIS_FS_ALLOWED_ROOTS",
+        "JARVIS_FS_MAX_BYTES",
+        "JARVIS_ZONE",
+        "JARVIS_LAB_MODE"
+      ],
+      "tools": [
+        "read_file",
+        "write_file",
+        "list_dir",
+        "stat",
+        "delete"
+      ],
+      "requires_snapshot_for": ["write_file", "delete"]
+    },
+    {
+      "name": "network",
+      "enabled": true,
+      "module": "mcp.network_mcp",
+      "description": "HTTP(S), DNS, ping, TCP port check, and nmap (lab mode only).",
+      "env_passthrough": [
+        "JARVIS_NET_ALLOWLIST",
+        "JARVIS_NET_ALLOW_PRIVATE",
+        "JARVIS_NET_MAX_BODY",
+        "JARVIS_LAB_MODE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY"
+      ],
+      "tools": [
+        "http_get",
+        "http_post",
+        "ping",
+        "resolve",
+        "port_check",
+        "nmap_scan"
+      ],
+      "lab_only_tools": ["nmap_scan"]
+    },
+    {
+      "name": "automation",
+      "enabled": true,
+      "module": "mcp.automation_mcp",
+      "description": "External automation: n8n webhook triggers + Apify actor runs.",
+      "env_passthrough": [
+        "N8N_WEBHOOK_BASE",
+        "N8N_AUTH_HEADER",
+        "APIFY_TOKEN",
+        "APIFY_BASE"
+      ],
+      "tools": [
+        "n8n_trigger",
+        "apify_run_actor",
+        "apify_get_dataset"
+      ]
+    }
+  ]
+}
