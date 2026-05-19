@@ -1,0 +1,63 @@
+# /etc/systemd/system/jarvis_core.service
+#
+# JARVIS v7.0 — main FastAPI app (agent loop + HTTP + voice + obs).
+#
+# Install:
+#   sudo cp config/systemd/jarvis_core.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now jarvis_core
+#
+# Secrets are loaded via systemd LoadCredential — they appear under
+# $CREDENTIALS_DIRECTORY and never show up in `systemctl show` or env dumps.
+
+[Unit]
+Description=JARVIS v7.0 core (FastAPI app)
+Documentation=https://github.com/malakasio/Ai-bot
+After=network-online.target docker.service postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jarvis
+Group=jarvis
+WorkingDirectory=/opt/jarvis
+EnvironmentFile=-/etc/jarvis/jarvis.env
+
+# Secrets — files under /etc/jarvis/secrets/, read-only to root.
+LoadCredential=anthropic_api_key:/etc/jarvis/secrets/anthropic_api_key
+LoadCredential=telegram_bot_token:/etc/jarvis/secrets/telegram_bot_token
+LoadCredential=deepgram_api_key:/etc/jarvis/secrets/deepgram_api_key
+LoadCredential=elevenlabs_api_key:/etc/jarvis/secrets/elevenlabs_api_key
+
+ExecStart=/opt/jarvis/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Hardcore restart policy (per goal): never give up, fast retry.
+Restart=always
+RestartSec=2s
+StartLimitIntervalSec=0
+
+# Startup grace period — voice / MCP / DB init can take a moment.
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Security hardening (P1/P3 alignment — narrow blast radius)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/jarvis /var/log /tmp/jarvis
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jarvis_core
+
+[Install]
+WantedBy=multi-user.target

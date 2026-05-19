@@ -37,6 +37,27 @@ a map.
                   └────────────────────┘
 ```
 
+### How it's wired
+
+`main.py` is the single entrypoint — a FastAPI app whose lifespan hook:
+
+1. Loads `config/mcp_config.json`, instantiates each MCP server, and
+   registers every tool with `core.agent` so the agent loop can call
+   them.
+2. Starts the **KAIROS** daemon (`core.kairos.Kairos`) as a supervised
+   asyncio task. KAIROS drains the task queue, polls GitHub, runs
+   health checks, and triggers `autoDream` after `DREAM_IDLE_THRESHOLD`
+   seconds of idleness.
+3. Starts the **Red-Zone Sentinel** (`core.sentinel.RedZoneSentinel`) as
+   a supervised asyncio task. It tails `/var/log/auth.log` and hashes
+   `/etc/passwd` / `/etc/ssh/sshd_config` for change detection.
+4. Mounts the **voice WebSocket** server (`voice/voice`) and the
+   **observability dashboard** (`/obs`).
+
+If any single daemon crashes, the in-process supervisor restarts it
+with exponential backoff (2 s → 60 s). systemd is the outer ring; the
+in-process supervisor is the inner one.
+
 ### Top-level layout
 
 | Path | Purpose |
@@ -84,20 +105,85 @@ explicit per-invocation opt-in.
 
 ## Quickstart
 
+There are two supported deployment shapes.
+
+### 1) Docker Compose (recommended for first run)
+
+Brings up PostgreSQL + pgvector, n8n, and (optionally) JARVIS itself in
+one shot. The `app` profile builds and runs the main container from the
+local `Dockerfile`.
+
 ```bash
-# 1. Copy env and fill in secrets (Telegram token, DB password, API keys)
 cp .env.example .env
-$EDITOR .env
+$EDITOR .env                                  # fill ANTHROPIC_API_KEY, etc.
 
-# 2. Bootstrap dependencies (Postgres + pgvector + Python deps)
-./scripts/setup.sh
+# Data plane only (Postgres + n8n) — JARVIS runs on the host:
+docker-compose up -d postgres n8n
 
-# 3. Initialize the database schema
-./scripts/db-init.sh
+# Or everything in containers:
+docker-compose --profile app up -d --build
 
-# 4. Start JARVIS
-./scripts/jarvis start
+# Tail logs:
+docker-compose logs -f jarvis
 ```
+
+Health check:
+
+```bash
+curl -fsS http://localhost:8000/healthz | jq
+curl -fsS http://localhost:8000/readyz  | jq
+```
+
+### 2) Native + systemd (production host)
+
+```bash
+cp .env.example .env
+sudo install -d -o jarvis -g jarvis /opt/jarvis /var/log/jarvis /var/lib/jarvis
+sudo rsync -a --exclude=.git ./ /opt/jarvis/
+sudo -u jarvis python3 -m venv /opt/jarvis/.venv
+sudo -u jarvis /opt/jarvis/.venv/bin/pip install -r requirements.txt \
+    fastapi "uvicorn[standard]" anthropic asyncpg pgvector httpx tenacity websockets
+
+# Initialize the database schema:
+psql -h localhost -U jarvis -d jarvis -f scripts/init_db.sql
+
+# Install secrets (mode 0400, root:root) under /etc/jarvis/secrets/
+sudo install -d -m 0700 /etc/jarvis/secrets
+printf '%s' "$ANTHROPIC_API_KEY"   | sudo tee /etc/jarvis/secrets/anthropic_api_key >/dev/null
+printf '%s' "$TELEGRAM_BOT_TOKEN"  | sudo tee /etc/jarvis/secrets/telegram_bot_token >/dev/null
+sudo chmod 0400 /etc/jarvis/secrets/*
+
+# Install systemd units (Restart=always, RestartSec=2s):
+sudo install -m 0644 config/systemd/*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now jarvis_core jarvis_sentinel jarvis_kairos
+sudo systemctl status jarvis_core
+```
+
+### Endpoints
+
+Once running on `http://<host>:8000`:
+
+| Path                     | Purpose                                            |
+|--------------------------|----------------------------------------------------|
+| `/`                      | Operator landing page                              |
+| `/healthz`               | Liveness + per-daemon status                       |
+| `/readyz`                | Readiness — fails if DB or any daemon is down      |
+| `/agent/run` (POST)      | One agent turn — `{"prompt": "..."}`               |
+| `/mcp/tools`             | List MCP tools                                     |
+| `/mcp/call` (POST)       | Dispatch an MCP tool — `{"tool":"...","args":{}}`  |
+| `/voice/voice` (WS)      | Voice pipeline (Deepgram → Claude → ElevenLabs)    |
+| `/obs/`                  | Real-time observability dashboard                  |
+
+### Tests
+
+```bash
+python3 -m pytest tests/ -v
+```
+
+The integration suite (`tests/test_integration_v7.py`) verifies that
+`main.py` boots, MCP tools register into the agent, and the sentinel /
+KAIROS daemons are constructable in dry-run.
 
 The first run creates `~/.local/share/jarvis/` (audit log, snapshots) and
 `/tmp/jarvis/` (MCP sockets, scratch).

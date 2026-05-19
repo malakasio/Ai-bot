@@ -1,0 +1,57 @@
+# /etc/systemd/system/jarvis_kairos.service
+#
+# JARVIS v7.0 — KAIROS background scheduler (autoDream, task queue,
+# GitHub poll, health checks).
+#
+# Installed as a separate unit from jarvis_core because:
+#   * KAIROS owns long-running DB work; isolating it means a stuck
+#     query won't make the HTTP surface flap.
+#   * It can be restarted independently to pick up CLAUDE.md / skill
+#     changes without bouncing the API.
+
+[Unit]
+Description=JARVIS v7.0 KAIROS daemon
+Documentation=https://github.com/malakasio/Ai-bot
+After=network-online.target postgresql.service jarvis_core.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jarvis
+Group=jarvis
+WorkingDirectory=/opt/jarvis
+EnvironmentFile=-/etc/jarvis/jarvis.env
+
+LoadCredential=anthropic_api_key:/etc/jarvis/secrets/anthropic_api_key
+LoadCredential=telegram_bot_token:/etc/jarvis/secrets/telegram_bot_token
+LoadCredential=github_token:/etc/jarvis/secrets/github_token
+
+ExecStart=/opt/jarvis/.venv/bin/python -m core.kairos
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=2s
+StartLimitIntervalSec=0
+
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/jarvis /var/log /tmp/jarvis
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jarvis_kairos
+
+[Install]
+WantedBy=multi-user.target

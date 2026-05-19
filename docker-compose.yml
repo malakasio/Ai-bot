@@ -1,20 +1,108 @@
 version: '3.9'
 
-# JARVIS v6.0 — Docker Compose
+# JARVIS v7.0 — Docker Compose
 #
-# v6 architecture:
-# - Main agent daemon: systemd service (NOT Docker) for systemd LoadCredential + file access
-# - Sandbox: Docker container for untrusted command execution
-# - This compose file: sandbox + optional support services
+# Brings up the data and automation plane. The main agent (jarvis_core)
+# is usually deployed via systemd on the host — but the `jarvis` service
+# here lets you run the full stack in containers for dev/CI.
 #
-# Usage:
-#   docker-compose up -d jarvis-sandbox   # Required: command sandbox
-#   docker-compose up -d caddy            # Optional: HTTPS reverse proxy
-#   docker-compose up -d ollama           # Optional: local LLM (free)
+# Default `docker-compose up -d` starts:
+#   * postgres    (PostgreSQL 16 + pgvector) — memory layers 2/3/4
+#   * n8n         workflow automation that JARVIS triggers via MCP
+#
+# Optional profiles:
+#   --profile app         also run jarvis_core in a container
+#   --profile sandbox     command-execution sandbox (Ubuntu)
+#   --profile lab         Kali sandbox (no external network)
+#   --profile ollama      local LLM
+#   --profile production  Caddy reverse proxy (HTTPS)
+#   --profile backup      Litestream replication
+#   --profile computer-use Xvfb display server for computer-use tools
 
 services:
 
-  # ─── Command sandbox (v6: all terminal cmds run through docker exec) ─────────
+  # ─── PostgreSQL + pgvector ────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: jarvis-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-jarvis}
+      POSTGRES_USER: ${POSTGRES_USER:-jarvis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jarvis}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jarvis} -d ${POSTGRES_DB:-jarvis}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jarvis_internal
+    restart: unless-stopped
+
+  # ─── n8n workflow automation ──────────────────────────────────────────
+  # JARVIS triggers webhooks here via the automation MCP server.
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: jarvis-n8n
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-false}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-}
+      - GENERIC_TIMEZONE=${USER_TIMEZONE:-UTC}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${N8N_DB:-n8n}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-jarvis}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-jarvis}
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - jarvis_internal
+    restart: unless-stopped
+
+  # ─── JARVIS core (optional in-container) ──────────────────────────────
+  jarvis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jarvis:v7.0
+    container_name: jarvis-core
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-jarvis}:${POSTGRES_PASSWORD:-jarvis}@postgres:5432/${POSTGRES_DB:-jarvis}
+      - N8N_WEBHOOK_BASE=http://n8n:5678/webhook
+      - JARVIS_HOME=/var/lib/jarvis
+      - PORT=8000
+    ports:
+      - "${JARVIS_PORT:-8000}:8000"
+    volumes:
+      - jarvis_data:/var/lib/jarvis
+      - /var/log/jarvis:/var/log/jarvis
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - jarvis_internal
+    restart: unless-stopped
+    profiles:
+      - app
+
+  # ─── Command sandbox (untrusted shell execution) ──────────────────────
   jarvis-sandbox:
     image: ubuntu:22.04
     container_name: jarvis-sandbox
@@ -36,8 +124,10 @@ services:
     networks:
       - jarvis_internal
     restart: unless-stopped
+    profiles:
+      - sandbox
 
-  # ─── Lab sandbox (separate, more permissive for network tools) ───────────────
+  # ─── Lab sandbox (Kali, no external internet) ─────────────────────────
   jarvis-lab:
     image: kalilinux/kali-rolling:latest
     container_name: jarvis-lab
@@ -49,14 +139,14 @@ services:
       - TERM=dumb
     cap_add:
       - NET_ADMIN
-      - NET_RAW   # Required for nmap/tcpdump
+      - NET_RAW
     networks:
       - jarvis_lab
     restart: unless-stopped
     profiles:
-      - lab    # Only started with: docker-compose --profile lab up
+      - lab
 
-  # ─── Ollama (free local LLM) ─────────────────────────────────────────────────
+  # ─── Ollama (free local LLM) ──────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: jarvis-ollama
@@ -73,12 +163,10 @@ services:
       resources:
         limits:
           memory: 8G
-    # Uncomment for GPU support:
-    # runtime: nvidia
-    # environment:
-    #   - NVIDIA_VISIBLE_DEVICES=all
+    profiles:
+      - ollama
 
-  # ─── Computer Use / Xvfb display server ─────────────────────────────────────
+  # ─── Xvfb (computer-use / browser automation) ─────────────────────────
   xvfb:
     image: ubuntu:22.04
     container_name: jarvis-xvfb
@@ -97,7 +185,7 @@ services:
     profiles:
       - computer-use
 
-  # ─── Caddy reverse proxy (HTTPS, auto Let's Encrypt) ─────────────────────────
+  # ─── Caddy reverse proxy (HTTPS, Let's Encrypt) ───────────────────────
   caddy:
     image: caddy:2-alpine
     container_name: jarvis-caddy
@@ -115,7 +203,7 @@ services:
     profiles:
       - production
 
-  # ─── Litestream DB replication to cloud (optional) ───────────────────────────
+  # ─── Litestream DB replication (optional) ─────────────────────────────
   litestream:
     image: litestream/litestream:latest
     container_name: jarvis-litestream
@@ -131,6 +219,9 @@ services:
       - backup
 
 volumes:
+  postgres_data:
+  n8n_data:
+  jarvis_data:
   ollama_data:
   caddy_data:
   caddy_config:
@@ -140,4 +231,4 @@ networks:
     driver: bridge
   jarvis_lab:
     driver: bridge
-    internal: true   # Lab network: no external internet by default
+    internal: true

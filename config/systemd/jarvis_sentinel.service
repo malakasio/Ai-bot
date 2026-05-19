@@ -1,0 +1,44 @@
+# /etc/systemd/system/jarvis_sentinel.service
+#
+# JARVIS v7.0 — Red-Zone Sentinel (independent daemon).
+# Runs separately from jarvis_core so a crash here cannot take down the
+# main agent, and so the sentinel keeps watching even when the API is
+# being restarted.
+
+[Unit]
+Description=JARVIS v7.0 Red-Zone Sentinel
+Documentation=https://github.com/malakasio/Ai-bot
+After=network.target
+
+[Service]
+Type=simple
+User=root                # iptables/ufw require CAP_NET_ADMIN
+Group=root
+WorkingDirectory=/opt/jarvis
+EnvironmentFile=-/etc/jarvis/jarvis.env
+LoadCredential=telegram_bot_token:/etc/jarvis/secrets/telegram_bot_token
+
+ExecStart=/opt/jarvis/.venv/bin/python -m core.sentinel
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=2s
+StartLimitIntervalSec=0
+
+TimeoutStartSec=30
+TimeoutStopSec=15
+
+# The sentinel needs to read /var/log/auth.log and run iptables, so it
+# can't be locked down as hard as jarvis_core. Still cap obvious risks.
+NoNewPrivileges=false   # iptables needs CAP_NET_ADMIN
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jarvis_sentinel
+
+[Install]
+WantedBy=multi-user.target
