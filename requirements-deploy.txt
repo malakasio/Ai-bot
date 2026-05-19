@@ -1,0 +1,19 @@
+# JARVIS v7.0 — minimum-viable deploy requirements.
+#
+# This is the dep set the Dockerfile installs for PaaS deploys
+# (Railway/Render/Fly). It is intentionally small so the build
+# completes inside free-tier memory/time limits.
+#
+# Heavier optional deps (faster-whisper, sentence-transformers,
+# spaCy, av) live in requirements.txt and are only needed when the
+# matching subsystems are turned on. The voice WS server detects
+# missing providers and emits a PipelineError at connect time
+# instead of taking the app down.
+
+fastapi>=0.115
+uvicorn[standard]>=0.32
+anthropic>=0.40
+httpx>=0.27
+tenacity>=8
+websockets>=12
+python-dotenv>=1

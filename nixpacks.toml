@@ -1,0 +1,24 @@
+# Nixpacks config — used by Railway/Render when no Dockerfile is found.
+#
+# This is a fallback. railway.json pins the builder to DOCKERFILE, so
+# Nixpacks should not normally be invoked. We ship this anyway so that:
+#   * Manual deploys (railway up) without a railway.json fall back to
+#     a sensible config rather than auto-detecting the giant
+#     requirements.txt and OOMing the build.
+#   * Other Nixpacks-based platforms get the same lean dep set.
+
+providers = ['python']
+
+[phases.setup]
+nixPkgs = ['python311', 'gcc']
+
+[phases.install]
+cmds = ['pip install --upgrade pip', 'pip install -r requirements-deploy.txt']
+
+[start]
+cmd = 'uvicorn main:app --host 0.0.0.0 --port $PORT'
+
+[variables]
+JARVIS_HOME = '/tmp/jarvis'
+JARVIS_SENTINEL_DRY_RUN = 'true'
+KAIROS_DRY_RUN = 'true'

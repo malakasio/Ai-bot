@@ -20,34 +20,36 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    JARVIS_HOME=/var/lib/jarvis
+    JARVIS_HOME=/var/lib/jarvis \
+    PORT=8000
 
-# System deps: git for snapshots, curl for healthchecks, postgresql-client
-# for psql-based DB bootstrap, ca-certificates for outbound HTTPS.
+# Minimal system deps. curl is required by HEALTHCHECK; ca-certificates
+# for outbound HTTPS. We deliberately do NOT install build-essential
+# or postgresql-client here — the deploy image stays lean so the build
+# finishes inside Railway/Render free-tier limits.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git postgresql-client \
-        build-essential \
+        ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/jarvis
 
-# Install Python deps first for layer caching.
-COPY requirements.txt requirements-minimal.txt ./
+# Install Python deps first for layer caching. requirements-deploy.txt
+# is the minimum-viable set: FastAPI, uvicorn, anthropic, httpx,
+# tenacity, websockets, python-dotenv. Heavier deps (faster-whisper,
+# sentence-transformers, spaCy, etc.) are intentionally NOT installed
+# in the deploy image — see requirements.txt for the full optional set.
+COPY requirements-deploy.txt ./
 RUN pip install --upgrade pip \
-    && pip install \
-        "fastapi>=0.115" "uvicorn[standard]>=0.32" \
-        "anthropic>=0.40" "httpx>=0.27" "tenacity>=8" \
-        "asyncpg>=0.29" "pgvector>=0.3" \
-        "websockets>=12" \
-        "python-dotenv>=1" \
-        "pytest>=8" "pytest-asyncio>=0.23"
+    && pip install -r requirements-deploy.txt
 
 # Now copy the source.
 COPY . /opt/jarvis
 
-# Create runtime dirs that the app expects.
+# Create runtime dirs that the app expects. Use /tmp paths so the
+# container can run under restrictive PaaS UIDs that can't write to
+# /var/lib.
 RUN mkdir -p /var/lib/jarvis /var/log/jarvis /tmp/jarvis \
-    && chmod 700 /var/lib/jarvis /var/log/jarvis
+    && chmod 0777 /var/lib/jarvis /var/log/jarvis /tmp/jarvis || true
 
 EXPOSE 8000
 
@@ -57,9 +59,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/healthz" || exit 1
 
-# Run via the integrated FastAPI app. main.py loads agent + sentinel
-# + KAIROS + voice WS + observability dashboard via the lifespan hook.
-# Shell form so ${PORT:-8000} expands at container start: PaaS
-# platforms inject $PORT and we must listen on it or the health probe
-# never connects.
+# Shell form so ${PORT:-8000} expands at container start. PaaS
+# platforms inject $PORT and we must listen on it or the upstream
+# health probe never connects.
 CMD exec python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}

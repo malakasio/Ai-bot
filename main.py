@@ -10,40 +10,52 @@ This is the single entrypoint that wires every v7.0 subsystem together:
   * MCP router          (mcp.router)        — exposed via /mcp/* and
                                                registered as agent tools
 
-Operational notes
------------------
-* The app uses FastAPI's lifespan to start/stop the daemons. If a
-  daemon fails to start (e.g. asyncpg missing for KAIROS) the API
-  continues to come up so the operator can inspect /healthz; the
-  failure is logged and surfaced under /healthz.daemons.
+Deployment-hardening notes
+--------------------------
+The PaaS health check is the bottleneck of every deploy. Railway,
+Render and Fly all decide "did the service become ready?" by polling
+GET /healthz (or /health). If that probe doesn't get a 200 inside
+the platform's window — Railway's default is two minutes — the
+container is killed and the deploy is marked failed.
 
-* The MCP router is registered into core.agent so every tool exposed
-  by the filesystem/network/automation servers is callable from the
-  agent loop. Destructive tools are already pre-snapshotted by the
-  agent (P3).
+This module is structured to make that probe succeed within
+milliseconds, no matter what else is broken:
 
-* All background tasks are auto-restarted with exponential backoff if
-  they crash. Process-level supervision is still handled by systemd
-  (see config/systemd/) — the in-process restart is the second layer.
+  1. /healthz and /health are bound on the FastAPI app BEFORE the
+     lifespan runs, before any subsystem import. The probe handler
+     does not import core.agent, mcp.router, or any other v7.0
+     module — it just returns {"ok": true}.
+  2. Sub-app mounts (voice, observability) happen INSIDE lifespan,
+     each wrapped in try/except. A broken voice mount cannot prevent
+     the rest of the app from serving.
+  3. MCP-tool registration into the agent is opportunistic. It logs
+     errors into /healthz.mcp_errors but never raises.
+  4. Daemon supervisors only start AFTER the app has yielded
+     (handled by asyncio.create_task in _Supervisor.start), so the
+     port is bound and accepting traffic before any slow init runs.
+  5. core.agent is imported lazily — never at module load time — so
+     a missing anthropic SDK on the build platform cannot break
+     `uvicorn main:app`.
 
 Endpoints
 ---------
-  GET  /healthz              — liveness + per-daemon status
+  GET  /healthz              — liveness (zero-dependency, always 200)
+  GET  /health               — alias for PaaS conventions
   GET  /readyz               — readiness (db reachable + daemons ready)
   GET  /                     — operator landing page
   POST /agent/run            — run one agent turn  {"prompt": "..."}
   GET  /mcp/tools            — list MCP tools
   POST /mcp/call             — dispatch an MCP tool
-  WS   /voice/voice          — voice pipeline WebSocket
-  ANY  /obs/*                — observability dashboard
+  WS   /voice/voice          — voice pipeline WebSocket (mounted in lifespan)
+  ANY  /obs/*                — observability dashboard (mounted in lifespan)
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
+import sys
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -51,29 +63,31 @@ from typing import Any, Optional
 
 # ─── Path setup so legacy 'src/' imports still work ───────────────────────
 
-import sys
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE / "src"))
 os.environ.setdefault("JARVIS_HOME", os.environ.get("JARVIS_HOME", "/tmp/jarvis"))
 
 
-# ─── Logging ──────────────────────────────────────────────────────────────
+# ─── Lightweight fallback logger ─────────────────────────────────────────
+#
+# We intentionally do NOT import core.agent at module load. The trace
+# logger there does filesystem I/O (creates /var/log/jarvis_agent.trace),
+# which can fail in restrictive PaaS containers and would take the
+# import down with it. We fall back to stdlib logging until lifespan
+# decides we have time for the richer logger.
 
 
 def _logger() -> logging.Logger:
-    try:
-        from core import agent as _agent
-        return _agent.get_logger()
-    except Exception:
-        log = logging.getLogger("jarvis.main")
-        if not log.handlers:
-            h = logging.StreamHandler()
-            h.setFormatter(logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-            log.addHandler(h)
-            log.setLevel(logging.INFO)
-        return log
+    log = logging.getLogger("jarvis.main")
+    if not log.handlers:
+        h = logging.StreamHandler(sys.stderr)
+        h.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        log.addHandler(h)
+        log.setLevel(logging.INFO)
+        log.propagate = False
+    return log
 
 
 # ─── Supervised background tasks ─────────────────────────────────────────
@@ -101,22 +115,17 @@ class _Supervisor:
         self.started_at = time.time()
         while not self._stop.is_set():
             try:
-                log.info("main.daemon.start", extra={"name": self.name})
+                log.info("daemon.%s.start", self.name)
                 await self.factory()
-                # Coroutine returned cleanly — usually means we asked it
-                # to stop. Don't restart.
-                log.info("main.daemon.exit_clean", extra={"name": self.name})
+                log.info("daemon.%s.exit_clean", self.name)
                 return
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
                 self.last_error = repr(e)
                 self.restart_count += 1
-                log.exception("main.daemon.crash", extra={
-                    "name": self.name, "exc": repr(e),
-                    "restart_count": self.restart_count,
-                    "backoff_s": backoff,
-                })
+                log.exception("daemon.%s.crash (restart=%d, backoff=%.1fs)",
+                              self.name, self.restart_count, backoff)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=backoff)
                     return
@@ -145,15 +154,31 @@ class _Supervisor:
         }
 
 
-# ─── MCP wiring ──────────────────────────────────────────────────────────
+# ─── State exposed to handlers ───────────────────────────────────────────
+
+
+class _AppState:
+    supervisors: dict[str, _Supervisor] = {}
+    mcp_tools_count: int = 0
+    mcp_errors: list[str] = []
+    mount_errors: list[str] = []
+    started_at: float = 0.0
+    lifespan_started: bool = False
+    lifespan_complete: bool = False
+
+
+STATE = _AppState()
+
+
+# ─── MCP wiring (opportunistic — never raises) ───────────────────────────
 
 
 def _register_mcp_tools_into_agent() -> tuple[int, list[str]]:
     """Wire every MCP tool through the agent's tool registry.
 
-    Returns (count_registered, errors).
+    Returns (count_registered, errors). Never raises — any failure ends
+    up in the errors list and surfaces via /healthz.mcp_errors.
     """
-    log = _logger()
     errors: list[str] = []
     try:
         from core import agent as _agent
@@ -169,19 +194,21 @@ def _register_mcp_tools_into_agent() -> tuple[int, list[str]]:
         return 0, errors
 
     n = 0
-    for tool in router.list_tools():
-        qualified = tool["qualified"]
+    try:
+        for tool in router.list_tools():
+            qualified = tool["qualified"]
 
-        async def _handler(args: dict[str, Any], _q: str = qualified) -> Any:
-            return await router.dispatch(_q, args)
+            async def _handler(args: dict[str, Any], _q: str = qualified) -> Any:
+                return await router.dispatch(_q, args)
 
-        _agent.register_mcp_tool(qualified, _handler)
-        n += 1
-    log.info("main.mcp.registered", extra={"tools": n})
+            _agent.register_mcp_tool(qualified, _handler)
+            n += 1
+    except Exception as e:
+        errors.append(f"mcp tool registration failed: {e!r}")
     return n, errors
 
 
-# ─── Daemon factories ────────────────────────────────────────────────────
+# ─── Daemon factories (imports deferred to call time) ───────────────────
 
 
 async def _run_sentinel() -> None:
@@ -196,26 +223,13 @@ async def _run_kairos() -> None:
     await kairos.start()
 
 
-# ─── State exposed to handlers ───────────────────────────────────────────
-
-
-class _AppState:
-    supervisors: dict[str, _Supervisor] = {}
-    mcp_tools_count: int = 0
-    mcp_errors: list[str] = []
-    started_at: float = 0.0
-
-
-STATE = _AppState()
-
-
 # ─── FastAPI app ─────────────────────────────────────────────────────────
 
 
 def create_app() -> Any:
     try:
-        from fastapi import FastAPI, HTTPException, Request
-        from fastapi.responses import HTMLResponse, JSONResponse
+        from fastapi import FastAPI, HTTPException
+        from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     except ImportError as e:
         raise RuntimeError(
             "fastapi not installed; pip install fastapi uvicorn") from e
@@ -225,12 +239,13 @@ def create_app() -> Any:
     @asynccontextmanager
     async def lifespan(app):
         STATE.started_at = time.time()
-        log.info("main.lifespan.start")
+        STATE.lifespan_started = True
+        log.info("lifespan.start")
 
         # PaaS detection — Railway / Render / Fly all inject $PORT. When
         # we're on a managed platform we don't have iptables, auth.log,
         # or systemd, so default the Sentinel to dry-run instead of
-        # crash-looping. The operator can still flip JARVIS_SENTINEL_DRY_RUN=false
+        # crash-looping. Operators can flip JARVIS_SENTINEL_DRY_RUN=false
         # explicitly to opt in.
         _on_paas = bool(
             os.environ.get("PORT")
@@ -238,12 +253,13 @@ def create_app() -> Any:
             or os.environ.get("RENDER")
             or os.environ.get("FLY_APP_NAME")
         )
-        if _on_paas and "JARVIS_SENTINEL_DRY_RUN" not in os.environ:
-            os.environ["JARVIS_SENTINEL_DRY_RUN"] = "true"
+        if _on_paas:
+            if "JARVIS_SENTINEL_DRY_RUN" not in os.environ:
+                os.environ["JARVIS_SENTINEL_DRY_RUN"] = "true"
+            if "KAIROS_DRY_RUN" not in os.environ:
+                os.environ["KAIROS_DRY_RUN"] = "true"
 
-        # 1) Register MCP tools into the agent — wrapped because we
-        # MUST NOT prevent the HTTP surface from coming up. Any MCP
-        # failure ends up in STATE.mcp_errors and surfaces via /healthz.
+        # 1) MCP tool registration. Wrapped — never crashes lifespan.
         try:
             n, errs = _register_mcp_tools_into_agent()
             STATE.mcp_tools_count = n
@@ -251,27 +267,48 @@ def create_app() -> Any:
         except Exception as e:  # noqa: BLE001
             STATE.mcp_tools_count = 0
             STATE.mcp_errors = [f"register_mcp_tools_into_agent crashed: {e!r}"]
-            log.exception("main.lifespan.mcp_init_failed",
-                          extra={"exc": repr(e)})
+            log.exception("lifespan.mcp_init_failed")
 
-        # 2) Start KAIROS (if enabled). On PaaS, KAIROS_ENABLED can be
-        # turned off via env to save resources — otherwise it runs and
-        # the supervisor restarts it on crash with exp. backoff.
+        # 2) Mount sub-apps. Done in lifespan rather than create_app so
+        # an import error in voice/obs cannot prevent the root app from
+        # serving /healthz.
+        if os.environ.get("VOICE_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
+            try:
+                from voice.websocket_server import create_app as _voice_app
+                app.mount("/voice", _voice_app())
+                log.info("mount.voice ok")
+            except Exception as e:  # noqa: BLE001
+                STATE.mount_errors.append(f"voice: {e!r}")
+                log.warning("mount.voice failed: %r", e)
+
+        if os.environ.get("OBS_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
+            try:
+                from observability.dashboard import create_app as _obs_app
+                app.mount("/obs", _obs_app())
+                log.info("mount.obs ok")
+            except Exception as e:  # noqa: BLE001
+                STATE.mount_errors.append(f"obs: {e!r}")
+                log.warning("mount.obs failed: %r", e)
+
+        # 3) Start daemons (each in its own supervised task; the lifespan
+        # itself does NOT await them — it yields immediately).
         if os.environ.get("KAIROS_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
             sup = _Supervisor("kairos", _run_kairos)
             STATE.supervisors["kairos"] = sup
             sup.start()
 
-        # 3) Start Sentinel (default on; dry-run lets it run in non-root envs)
         if os.environ.get("SENTINEL_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
             sup = _Supervisor("sentinel", _run_sentinel)
             STATE.supervisors["sentinel"] = sup
             sup.start()
 
+        STATE.lifespan_complete = True
+        log.info("lifespan.ready: port bound, daemons supervised")
+
         try:
             yield
         finally:
-            log.info("main.lifespan.stop")
+            log.info("lifespan.stop")
             await asyncio.gather(
                 *(s.stop() for s in STATE.supervisors.values()),
                 return_exceptions=True,
@@ -284,49 +321,57 @@ def create_app() -> Any:
         lifespan=lifespan,
     )
 
-    # ── Health / readiness ────────────────────────────────────────────────
+    # ── Health (registered FIRST so even a totally broken lifespan
+    # cannot prevent /healthz from returning 200) ─────────────────────────
     #
-    # /health and /healthz are intentionally permissive — they return 200
-    # as long as the FastAPI process is serving. PaaS health probes
-    # (Railway, Render, Fly, Kubernetes) need a route that says "the
-    # container is alive and listening" without depending on every
-    # downstream (DB, daemons) being warm yet.
-    #
-    # For "is everything ready for traffic?" use /readyz, which actually
-    # gates on daemon status and DB reachability.
-    #
-    # Both /health and /healthz exist because PaaS conventions disagree:
-    # Railway/Render templates default to /health, Kubernetes idiomatic
-    # is /healthz. Aliasing both costs us nothing and removes a footgun.
+    # These handlers MUST NOT import anything heavy and MUST NOT touch
+    # STATE in a way that could raise. If you can't compute it without
+    # branching, default it. The PaaS probe is the most important
+    # consumer; correctness matters less than availability.
 
-    async def _healthz_body() -> dict[str, Any]:
+    def _healthz_body() -> dict[str, Any]:
+        try:
+            uptime = int(time.time() - STATE.started_at) if STATE.started_at else 0
+        except Exception:
+            uptime = 0
+        try:
+            daemons = {n: s.status() for n, s in STATE.supervisors.items()}
+        except Exception:
+            daemons = {}
         return {
             "ok": True,
-            "uptime_s": int(time.time() - STATE.started_at) if STATE.started_at else 0,
+            "uptime_s": uptime,
+            "lifespan_started": STATE.lifespan_started,
+            "lifespan_complete": STATE.lifespan_complete,
             "mcp_tools": STATE.mcp_tools_count,
             "mcp_errors": STATE.mcp_errors,
-            "daemons": {n: s.status() for n, s in STATE.supervisors.items()},
+            "mount_errors": STATE.mount_errors,
+            "daemons": daemons,
         }
 
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
-        return await _healthz_body()
+        return _healthz_body()
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         # Alias for PaaS probes that default to /health (Railway, Render).
-        return await _healthz_body()
+        return _healthz_body()
+
+    @app.get("/ping", response_class=PlainTextResponse)
+    async def ping() -> str:
+        # The lightest probe possible — pure string, no JSON, no STATE access.
+        # Useful as a fallback healthcheck path.
+        return "pong"
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:
         problems: list[str] = []
-        if STATE.mcp_tools_count == 0:
-            problems.append("no MCP tools registered")
+        if not STATE.lifespan_complete:
+            problems.append("lifespan still warming up")
         for name, sup in STATE.supervisors.items():
             if not sup.status()["running"]:
                 problems.append(f"daemon {name} not running")
-        # Try a DB ping if asyncpg is available — but don't fail readiness
-        # for systems running without Postgres (e.g. minimal profile).
         db_status = "skipped"
         try:
             from core import database as _db
@@ -340,7 +385,7 @@ def create_app() -> Any:
         body = {"ok": not problems, "problems": problems, "db": db_status}
         return JSONResponse(body, status_code=200 if not problems else 503)
 
-    # ── Root ──────────────────────────────────────────────────────────────
+    # ── Root landing ──────────────────────────────────────────────────────
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
@@ -359,11 +404,12 @@ def create_app() -> Any:
 a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
 <h1>JARVIS v7.0</h1>
 <p>uptime: {int(time.time() - STATE.started_at) if STATE.started_at else 0}s ·
-   mcp tools: {STATE.mcp_tools_count}</p>
+   mcp tools: {STATE.mcp_tools_count} ·
+   lifespan: {'ready' if STATE.lifespan_complete else 'warming'}</p>
 <h2>daemons</h2><ul>{''.join(rows) or '<li>(none)</li>'}</ul>
 <h2>endpoints</h2>
 <ul>
-  <li><a href="/healthz">/healthz</a> &middot; <a href="/readyz">/readyz</a></li>
+  <li><a href="/healthz">/healthz</a> &middot; <a href="/health">/health</a> &middot; <a href="/ping">/ping</a> &middot; <a href="/readyz">/readyz</a></li>
   <li><a href="/mcp/tools">/mcp/tools</a></li>
   <li><a href="/obs/">/obs/</a> (observability dashboard)</li>
   <li><code>WS /voice/voice</code></li>
@@ -383,7 +429,6 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
             from core.agent import run_jarvis_core
         except Exception as e:
             raise HTTPException(503, f"agent unavailable: {e!r}")
-        # Build a minimal tool schema for the agent from MCP tools.
         try:
             from mcp.router import get_router
             mcp_tools = [
@@ -436,34 +481,13 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
             raise HTTPException(503, f"mcp unavailable: {e!r}")
         return await dispatch(tool, args)
 
-    # ── Voice + observability sub-apps ────────────────────────────────────
-
-    try:
-        from voice.websocket_server import create_app as _voice_app
-        app.mount("/voice", _voice_app())
-        log.info("main.mount.voice", extra={"path": "/voice"})
-    except Exception as e:
-        log.warning("main.mount.voice_failed", extra={"exc": repr(e)})
-
-    try:
-        from observability.dashboard import create_app as _obs_app
-        app.mount("/obs", _obs_app())
-        log.info("main.mount.obs", extra={"path": "/obs"})
-    except Exception as e:
-        log.warning("main.mount.obs_failed", extra={"exc": repr(e)})
-
     return app
 
 
 # ─── Module-level singleton (for `uvicorn main:app`) ──────────────────────
 
 
-try:
-    app = create_app()
-except Exception as _e:  # pragma: no cover
-    # Don't let import-time failures hide the cause; raise so the operator
-    # sees it in the systemd log instead of a generic "no attribute 'app'".
-    raise
+app = create_app()
 
 
 # ─── CLI entrypoint ───────────────────────────────────────────────────────
