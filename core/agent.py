@@ -394,29 +394,128 @@ def clear_mcp_tools() -> None:
     _MCP_TOOLS.clear()
 
 
+# ─── Destructive-op snapshot guard (P3) ───────────────────────────────────
+#
+# Any tool whose qualified name (e.g. "filesystem.write_file") or bare name
+# is in DESTRUCTIVE_TOOLS triggers a pre-mutation snapshot before execution.
+# The snapshot tag is attached to the tool result so the agent — and the
+# audit log — know which checkpoint to roll back to.
+#
+# Callers can extend the set at startup:
+#     from core import agent
+#     agent.DESTRUCTIVE_TOOLS.add("custom.dangerous_op")
+
+DESTRUCTIVE_TOOLS: set[str] = {
+    # filesystem MCP
+    "write_file", "delete",
+    "filesystem.write_file", "filesystem.delete",
+    # shell MCP, if registered
+    "exec", "shell.exec",
+    # git MCP — only mutating ops
+    "commit", "git.commit", "stage", "git.stage",
+    # n8n / apify — fire side-effects
+    "n8n_trigger", "automation.n8n_trigger",
+    "apify_run_actor", "automation.apify_run_actor",
+}
+
+
+def is_destructive(tool_name: str) -> bool:
+    """Return True if the tool needs a pre-mutation snapshot."""
+    if tool_name in DESTRUCTIVE_TOOLS:
+        return True
+    # Match bare name when caller passed qualified, and vice versa.
+    bare = tool_name.split(".", 1)[-1]
+    return bare in DESTRUCTIVE_TOOLS
+
+
+async def _create_snapshot(reason: str) -> Optional[str]:
+    """Shell out to scripts/snapshot.sh. Returns the tag, or None on failure.
+
+    Best-effort by design: a snapshot failure should NOT abort the tool
+    call itself when JARVIS_REQUIRE_SNAPSHOT is false. When the env flag
+    is true the caller should treat None as a hard stop.
+    """
+    log = get_logger()
+    script = Path(__file__).resolve().parent.parent / "scripts" / "snapshot.sh"
+    if not script.exists():
+        log.warning("agent.snapshot.script_missing",
+                    extra={"path": str(script)})
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", str(script), reason, "--no-push",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(),
+                                                timeout=30.0)
+    except Exception as e:
+        log.warning("agent.snapshot.exec_failed", extra={"exc": repr(e)})
+        return None
+    if proc.returncode != 0:
+        log.warning("agent.snapshot.rc_nonzero", extra={
+            "rc": proc.returncode,
+            "stderr": stderr.decode("utf-8", "replace")[:512],
+        })
+        return None
+    tag = stdout.decode("utf-8", "replace").strip().splitlines()[-1:]
+    return tag[0] if tag else None
+
+
 async def execute_mcp_tool(name: str, tool_input: dict[str, Any]) -> Any:
     """Dispatch a tool_use block to the appropriate MCP server.
 
     The handler is expected to honor zone validation, snapshot rules, and
     audit logging itself (per CLAUDE.md). Errors propagate.
+
+    Before any tool in DESTRUCTIVE_TOOLS runs, a pre-mutation snapshot
+    is taken via scripts/snapshot.sh. If JARVIS_REQUIRE_SNAPSHOT=true
+    (the default in hardcore mode) and the snapshot fails, the tool
+    call is refused. Otherwise the call proceeds and the snapshot
+    failure is logged.
     """
     handler = _MCP_TOOLS.get(name)
     if handler is None:
         raise KeyError(f"no MCP handler registered for tool: {name}")
+
     log = get_logger()
+
+    snapshot_tag: Optional[str] = None
+    if is_destructive(name):
+        require = os.environ.get("JARVIS_REQUIRE_SNAPSHOT", "true") \
+                    .lower() in {"1", "true", "yes", "on"}
+        reason = f"agent:tool:{name}"
+        snapshot_tag = await _create_snapshot(reason)
+        if snapshot_tag:
+            log.info("agent.snapshot.created",
+                     extra={"tool": name, "tag": snapshot_tag})
+        else:
+            log.warning("agent.snapshot.unavailable",
+                        extra={"tool": name, "require": require})
+            if require:
+                raise RuntimeError(
+                    f"refusing destructive tool {name!r}: snapshot failed "
+                    "and JARVIS_REQUIRE_SNAPSHOT=true"
+                )
+
     t0 = time.monotonic()
     try:
         result = await handler(tool_input)
         log.info("mcp.tool.ok", extra={
             "tool": name,
             "duration_ms": int((time.monotonic() - t0) * 1000),
+            "snapshot": snapshot_tag,
         })
+        # Decorate the result with the rollback tag when applicable.
+        if snapshot_tag and isinstance(result, dict):
+            result = {**result, "_snapshot": snapshot_tag}
         return result
     except Exception as e:
         log.error("mcp.tool.fail", extra={
             "tool": name,
             "duration_ms": int((time.monotonic() - t0) * 1000),
             "exc": repr(e),
+            "snapshot": snapshot_tag,
         })
         raise
 
