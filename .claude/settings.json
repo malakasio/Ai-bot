@@ -5,5 +5,6 @@
   "primaryModel": "qwen/qwen3-coder-next",
   "fastModel": "qwen/qwen3-coder-next",
   "enableExperimentalFeatures": false,
-  "disablePromptCaching": false
+  "disablePromptCaching": false,
+  "bash_timeout": 120000
 }

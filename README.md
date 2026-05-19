@@ -1,156 +1,164 @@
-JARVIS v6.0 — Αυτόνομος Ψηφιακός Βοηθός
+# JARVIS v7.0
 
-100% δωρεάν stack — τρέχει χωρίς API keys, χωρίς μηνιαίο κόστος.
+> Just A Rather Very Intelligent System — a persistent, self-improving,
+> security-zoned digital assistant. Not a chatbot. A daemon with a brain.
 
-"Αυτό δεν είναι demo. Είναι ο χάρτης για να χτίσεις κάτι πραγματικό." — Blueprint v3
-Free Stack
+JARVIS v7.0 is a ground-up rebuild on top of the v6.0 stack. The headline
+changes are **hardcore protocol enforcement**, **bash-only filesystem
+operations**, **MCP-based tool integration**, and **snapshot-before-mutate**
+as a system-wide invariant.
 
-Component	Free Option	Optional Paid Upgrade
-LLM	Ollama (Llama 3.2, Mistral)	Anthropic Claude
-STT	faster-whisper (local)	Deepgram Nova-3
-TTS	edge-tts (Microsoft free)	ElevenLabs Flash v2.5
-Embeddings	sentence-transformers (local)	OpenAI ada-002
-Database	SQLite + sqlite-vec	—
-Hosting	Oracle Cloud Free Tier	Hetzner CX32 (~€15/mo)
-Κόστος: €0/μήνα (μόνο ρεύμα/bandwidth αν τρέχεις locally)
+For the binding behavioral contract — protocols, zones, snapshot rules — see
+[`CLAUDE.md`](./CLAUDE.md). That file is the source of truth. This README is
+a map.
 
-Quick Start
+---
 
-# 1. Clone
-git clone https://github.com/your/jarvis
-cd jarvis
+## Architecture
 
-# 2. Setup (Ubuntu 22.04)
-chmod +x scripts/setup.sh
-sudo ./scripts/setup.sh --with-ollama
+```
+                ┌──────────────────────────────────────────────┐
+                │                 Operator                     │
+                │     (voice · telegram · http · dashboard)    │
+                └────────────────────┬─────────────────────────┘
+                                     │
+                          ┌──────────▼──────────┐
+                          │       core/         │   ← orchestrator, router,
+                          │  identity & policy  │     zone validator, audit
+                          └─┬────────┬────────┬─┘
+                            │        │        │
+                  ┌─────────▼─┐  ┌───▼───┐  ┌─▼─────────┐
+                  │   mcp/    │  │skills/│  │ memory/   │
+                  │  servers  │  │ how-to│  │ pg+vector │
+                  └───────────┘  └───────┘  └───────────┘
+                            │
+                  ┌─────────▼──────────┐
+                  │     scripts/       │   ← bash-only filesystem ops
+                  └────────────────────┘
+```
 
-# 3. Configure
+### Top-level layout
+
+| Path | Purpose |
+|------|---------|
+| `core/` | Orchestrator, model router, zone validator, audit logger, snapshot manager. The trust-critical code. |
+| `mcp/` | Model Context Protocol servers and clients. Tool surface for the LLM. |
+| `skills/` | One subdirectory per skill, each with a `SKILL.md` (procedural memory). |
+| `config/` | Static configuration (zones, model routing, MCP wiring). Not secrets. |
+| `scripts/` | Bash entry points for every filesystem-touching operation. P4 lives here. |
+| `tests/` | Unit and integration tests, including protocol-compliance tests. |
+| `CLAUDE.md` | Behavioral contract. The DNA. |
+| `.env.example` | Environment variables — copy to `.env` and fill in. |
+
+---
+
+## The seven hardcore protocols
+
+JARVIS v7.0 ships with seven protocols that are enforced in code, not in
+prompts. They are restated here for visibility; the canonical version is in
+[`CLAUDE.md`](./CLAUDE.md).
+
+1. **P1 No fabrication** — tool outputs are never invented.
+2. **P2 No plaintext secrets** — pre-commit scan, abort on match.
+3. **P3 Snapshot before mutation** — `git stash` or `pre-mutation/*` tag.
+4. **P4 Bash-only file ops** — every write/delete shells out via `scripts/`.
+5. **P5 Audit every action** — structured append-only log.
+6. **P6 Validate before execute** — zone validator gates every command.
+7. **P7 Fail loud, fail fast** — no silent retries on destructive ops.
+
+---
+
+## Security zones
+
+| Zone | Paths | Behavior |
+|------|-------|----------|
+| Green | `~/jarvis/`, project root, `/tmp/jarvis/`, `~/.cache/jarvis/` | read/write, no confirmation |
+| Yellow | `~/`, `/tmp/`, `~/Documents`, etc. | read free, write needs confirm |
+| Red | `/etc`, `/var`, `/usr`, `/opt`, `/system`, `/data` | blocked unless `JARVIS_ZONE=red` |
+| Black | block devices, `/proc/*/mem`, private keys, wallets | never |
+
+`JARVIS_LAB_MODE=true` only relaxes the yellow zone. Red and black require
+explicit per-invocation opt-in.
+
+---
+
+## Quickstart
+
+```bash
+# 1. Copy env and fill in secrets (Telegram token, DB password, API keys)
 cp .env.example .env
-nano .env  # Minimum: TELEGRAM_BOT_TOKEN + TELEGRAM_USER_ID
+$EDITOR .env
 
-# 4. Start
-./scripts/start_dev.sh
-Architecture
+# 2. Bootstrap dependencies (Postgres + pgvector + Python deps)
+./scripts/setup.sh
 
-┌─────────────────────────────────────────────────────┐
-│                    JARVIS v6.0                      │
-│                                                     │
-│  Voice Pipeline              Agent System           │
-│  ┌──────────────┐           ┌──────────────────┐   │
-│  │ STT          │           │ Coordinator       │   │
-│  │ (Whisper/DG) │           │ Sub-agents        │   │
-│  │ VAD Process  │    LLM    │ Agent Teams       │   │
-│  │ TTS          │◄─────────►│ Tool Registry     │   │
-│  │ (edge/EL)    │  (Ollama  │                   │   │
-│  └──────────────┘  /Claude) │ Memory System     │   │
-│                             │ (SQLite+vectors)  │   │
-│  KAIROS Daemon              └──────────────────┘   │
-│  ┌──────────────┐                                   │
-│  │ Poll every 5m│           Security Zones          │
-│  │ autoDream    │           ┌──────────────────┐   │
-│  │ GitHub watch │           │ Green/Yellow/Red  │   │
-│  │ Notifications│           │ Sandbox (Docker)  │   │
-│  └──────────────┘           │ Audit log         │   │
-│                             └──────────────────┘   │
-│  API / Telegram Bot                                 │
-│  FastAPI + WebSocket + PWA Dashboard               │
-└─────────────────────────────────────────────────────┘
-Free Deployment Options
+# 3. Initialize the database schema
+./scripts/db-init.sh
 
-Option 1: Oracle Cloud Always Free (Best)
+# 4. Start JARVIS
+./scripts/jarvis start
+```
 
-4 OCPUs ARM, 24GB RAM — plenty for all models
-200GB storage, unlimited bandwidth
-Instructions: docs/oracle-cloud-setup.md
-Option 2: Your own machine (Raspberry Pi 5 or any Linux)
+The first run creates `~/.local/share/jarvis/` (audit log, snapshots) and
+`/tmp/jarvis/` (MCP sockets, scratch).
 
-sudo ./scripts/setup.sh --with-ollama
-Option 3: Test on Google Colab
+---
 
-Open notebooks/colab_setup.ipynb — sessions expire but great for testing.
+## Memory architecture
 
-Milestones (Pass/Fail Criteria)
+Four tiers, increasing in persistence and latency:
 
-Milestone 1: Voice ✓
+- **Working** — in-context, current session, ~100k tokens.
+- **Episodic** — PostgreSQL hypertables. *What happened, when, outcome.*
+- **Semantic** — pgvector embeddings. *Facts, concepts, relationships.*
+- **Procedural** — PostgreSQL `rules` + `skills/*/SKILL.md`. *How to do things.*
 
-Voice question → answer in <900ms (programmatic measurement)
-Barge-in: stops and listens in <300ms
-5 consecutive questions without crash or memory leak
-Milestone 2: Memory ✓
+`autoDream` runs during idle windows and promotes episodic → semantic →
+procedural. See `core/dream.py`.
 
-Start conversation, say something important, close
-24h later: remembers correctly
-Memory retrieval < 200ms for top-5 results
-Memory never exceeds 30% of context window
-Milestone 3: Autonomous Action ✓
+---
 
-Agent creates a file autonomously without breaking anything
-Audit log records every action with timestamp
-Wrong action → rollback in <30 seconds
-Milestone 4: Always-On ✓
+## Model routing
 
-System reboot → daemon returns automatically
-Telegram /status works from anywhere
-KAIROS runs every 5min without drift
-Configuration
+| Task class | Model |
+|------------|-------|
+| Conversation, STT/TTS routing | Claude Haiku |
+| File ops, code review, logs | Claude Sonnet |
+| Architecture, deep debugging | Claude Opus |
+| Simple offline tasks | Local LLM via Ollama |
 
-All configuration via environment variables (.env):
+Routing decisions are logged. The router is in `core/router.py`.
 
-# Minimum required (no API keys needed):
-JARVIS_HOME=/home/jarvis
-USER_TIMEZONE=Europe/Athens
+---
 
-# Telegram (free, required for mobile control):
-TELEGRAM_BOT_TOKEN=xxx
-TELEGRAM_USER_ID=123456789
+## Self-improvement loop
 
-# For lab mode (pentesting/network tools in isolated environment):
-JARVIS_LAB_MODE=true   # Only in isolated networks you own
+After every significant task JARVIS scores itself 0–100 and, on `score < 70`,
+appends a lesson to the relevant `skills/<skill>/SKILL.md`. A skill with a
+rolling failure rate above 20% (window of 20) is flagged for review.
 
-# Optional paid upgrades:
-ANTHROPIC_API_KEY=sk-ant-...   # Claude API
-DEEPGRAM_API_KEY=...           # Faster STT
-ELEVENLABS_API_KEY=...         # Higher quality TTS
-Security Zones
+---
 
-Zone	Paths	Access
-Green	~/jarvis/workspace/	Full read/write
-Yellow	~/*	Read OK, write needs confirmation
-Orange	~/Documents/	Confirmation required
-Red	/etc, /var, /sys	Blocked (needs JARVIS_ZONE=red)
-Black	/proc, /sys/kernel	Never
-Lab Mode (Experimental, Educational Only)
+## Repository conventions
 
-For network security research in isolated, owned environments:
+- **Commits** include `Co-Authored-By: JARVIS <jarvis@local>` when JARVIS
+  authors the change.
+- **No force-push** to shared branches.
+- **No `--no-verify`** on commits.
+- **No `git config --global`** without operator approval.
+- Pre-commit hook scans for secret patterns; the hook is part of the safety
+  net, not a suggestion.
 
-JARVIS_LAB_MODE=true
-JARVIS_ZONE=red   # Only if you need /etc access too
-Enables: nmap, tcpdump, HTTP requests to any domain, credential vault. Never use on networks you don't own.
+---
 
-150+ Bugs Fixed (v6)
+## Legacy
 
-See jarvis_blueprint_v6.pdf for the complete list. Key fixes:
+The pre-v7.0 codebase lives under [`_legacy/`](./_legacy) for reference. It
+is not built, tested, or imported by v7.0 code. Lift code from it
+deliberately, not by habit.
 
-Full agentic tool-use loop (not single-call)
-max_tokens=8192 (not 2048)
-Anthropic exact token counting (not tiktoken)
-FIFO trim removes pairs not single messages
-VAD in separate process (not asyncio — GIL issue)
-Server streams audio bytes to client (no mpv/PulseAudio)
-systemd LoadCredential (not Environment=)
-Tenacity OUTSIDE semaphore (deadlock fix)
-Circuit breaker bounded deque (memory leak fix)
-Persistent session secret (no forced logout on restart)
-...and 140+ more
-Self-Improvement Loop
+---
 
-Task executes → Score (0-100) → If score < 70:
-  → Agent proposes SKILL.md update
-  → You review via /skill_proposals
-  → Accept/reject via API or Telegram
-  → SKILL.md updated (append-only, versioned)
-Core code: NEVER auto-updated by agent. Only SKILL.md files.
+## License
 
-License
-
-MIT — build freely, learn openly.
+TBD.
