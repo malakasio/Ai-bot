@@ -1,0 +1,29 @@
+# FastAPI - Modern, fast (high-performance) web framework for building APIs with Python 3.7+ based on standard Python type hints
+fastapi
+
+# Uvicorn - Lightning-fast ASGI server to run the FastAPI application
+uvicorn
+
+# SQLAlchemy - SQL toolkit and ORM for Python, providing a full suite of well known enterprise-level persistence patterns
+sqlalchemy
+
+# HTTPX - Next generation HTTP client for Python, supports both sync and async requests, needed for API calls
+httpx
+
+# Tenacity - General-purpose retry library for Python, allows retrying function calls, useful for handling transient failures
+tenacity
+
+# Pydantic - Data validation and settings management using Python type annotations, used by FastAPI for request/response validation
+pydantic
+
+# Faster-Whisper - Optimized inference for Whisper models, provides faster speech-to-text transcription
+faster-whisper
+
+# Edge-TTS - Text-to-speech service using Microsoft Edge's online TTS, enables voice output capabilities
+edge-tts
+
+# Sentence-Transformers - Framework for state-of-the-art sentence, text, and image embeddings, needed for semantic understanding
+sentence-transformers
+
+# SQLite-Vec - SQLite extension for vector similarity search, enables efficient vector operations without external dependencies
+sqlite-vec
