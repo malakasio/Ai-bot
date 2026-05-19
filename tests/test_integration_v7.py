@@ -162,6 +162,46 @@ class TestKairosSmoke:
         assert "health" in out
 
 
+# ─── Logger collision regression ─────────────────────────────────────────
+
+
+class TestLoggerExtraCollision:
+    """Regression: logger.info(..., extra={"name": "x"}) raised
+    KeyError("Attempt to overwrite 'name' in LogRecord") and crashed the
+    KAIROS / Sentinel daemons on startup. The fix sanitizes `extra` via a
+    LoggerAdapter that renames colliding keys to `extra_<key>`.
+    """
+
+    def test_reserved_keys_do_not_crash(self):
+        from core.agent import get_logger
+        log = get_logger()
+        # Every reserved LogRecord attribute name passed via extra.
+        # Without the fix the first call raises KeyError.
+        bad = {
+            "name": "kairos",
+            "message": "x",
+            "module": "y",
+            "args": [1, 2],
+            "msg": "z",
+            "level": "INFO",
+            "thread": 42,
+        }
+        log.info("kairos.start", extra=bad)   # must not raise
+        log.warning("ping", extra={"name": "sentinel", "ip": "192.0.2.1"})
+
+    def test_kairos_start_log_does_not_raise(self):
+        # Re-run the exact call site that crashed the daemon: log the
+        # KairosConfig as extra, which has a `name`-ish 'name' field via
+        # dataclasses.asdict will not have but other reserved keys can sneak
+        # in via metadata.
+        import dataclasses
+        from core.kairos import KairosConfig
+        from core.agent import get_logger
+        cfg = KairosConfig()
+        log = get_logger()
+        log.info("kairos.start", extra=dataclasses.asdict(cfg))
+
+
 # ─── Healthz via TestClient ──────────────────────────────────────────────
 
 

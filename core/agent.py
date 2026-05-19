@@ -71,6 +71,36 @@ def _resolve_trace_path() -> Path:
         return fb
 
 
+# Reserved LogRecord attributes. We never let an `extra={}` field
+# overwrite these via logger.makeRecord — Python's logging refuses, and
+# the call site dies with KeyError("Attempt to overwrite 'X' in
+# LogRecord"). The formatter has to know the full set so that:
+#   (a) we skip them when serializing (they're already represented by
+#       payload["level"], payload["logger"], etc.), and
+#   (b) the helper below can rename colliding keys before they reach
+#       logger.info(..., extra=...).
+_RESERVED_RECORD_ATTRS = frozenset({
+    "args", "asctime", "created", "exc_info", "exc_text", "filename",
+    "funcName", "levelname", "levelno", "lineno", "message", "module",
+    "msecs", "msg", "name", "pathname", "process", "processName",
+    "relativeCreated", "stack_info", "thread", "threadName", "taskName",
+})
+
+
+def _sanitize_extra(extra: dict[str, Any]) -> dict[str, Any]:
+    """Rename keys that collide with LogRecord attributes.
+
+    Anything in _RESERVED_RECORD_ATTRS would make logger.makeRecord raise
+    KeyError. We prefix with `extra_` so the data survives in the trace.
+    """
+    if not extra:
+        return extra
+    safe: dict[str, Any] = {}
+    for k, v in extra.items():
+        safe[f"extra_{k}" if k in _RESERVED_RECORD_ATTRS else k] = v
+    return safe
+
+
 class _JsonLineFormatter(logging.Formatter):
     """Emit one JSON object per line so the trace is grep-able and tail-able."""
 
@@ -84,13 +114,7 @@ class _JsonLineFormatter(logging.Formatter):
         }
         # Anything attached via logger.<level>(..., extra={...}) gets merged.
         for k, v in record.__dict__.items():
-            if k in {
-                "args", "asctime", "created", "exc_info", "exc_text", "filename",
-                "funcName", "levelname", "levelno", "lineno", "module",
-                "msecs", "message", "msg", "name", "pathname", "process",
-                "processName", "relativeCreated", "stack_info", "thread",
-                "threadName",
-            }:
+            if k in _RESERVED_RECORD_ATTRS:
                 continue
             try:
                 json.dumps(v)
@@ -102,10 +126,27 @@ class _JsonLineFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
-_logger: Optional[logging.Logger] = None
+class _SafeExtraAdapter(logging.LoggerAdapter):
+    """LoggerAdapter that sanitizes `extra={}` to avoid LogRecord collisions.
+
+    Any caller key that shadows a reserved LogRecord attribute (`name`,
+    `message`, `module`, ...) is renamed to `extra_<key>` before reaching
+    logger.makeRecord. Without this, e.g. ``log.info("x", extra={"name":
+    ...})`` raises ``KeyError("Attempt to overwrite 'name' in
+    LogRecord")`` and crashes the caller.
+    """
+
+    def process(self, msg, kwargs):  # type: ignore[override]
+        extra = kwargs.get("extra")
+        if extra:
+            kwargs["extra"] = _sanitize_extra(extra)
+        return msg, kwargs
 
 
-def get_logger() -> logging.Logger:
+_logger: Optional[logging.LoggerAdapter] = None
+
+
+def get_logger() -> logging.LoggerAdapter:
     """Lazy logger init so importing the module never fails on FS issues."""
     global _logger
     if _logger is not None:
@@ -130,9 +171,11 @@ def get_logger() -> logging.Logger:
         sh.setFormatter(_JsonLineFormatter())
         log.addHandler(sh)
 
-    _logger = log
-    log.info("agent logger initialized", extra={"trace_path": str(trace_path)})
-    return log
+    adapter = _SafeExtraAdapter(log, {})
+    _logger = adapter
+    adapter.info("agent logger initialized",
+                 extra={"trace_path": str(trace_path)})
+    return adapter
 
 
 # ─── Credentials ──────────────────────────────────────────────────────────
