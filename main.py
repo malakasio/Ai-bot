@@ -223,6 +223,15 @@ async def _run_kairos() -> None:
     await kairos.start()
 
 
+async def _run_telegram() -> None:
+    """Inbound Telegram bot daemon. Returns clean when disabled or
+    when python-telegram-bot is missing — the supervisor treats that
+    as a normal shutdown and won't restart-loop.
+    """
+    from core.telegram_bot import start_telegram_bot
+    await start_telegram_bot()
+
+
 # ─── FastAPI app ─────────────────────────────────────────────────────────
 
 
@@ -301,6 +310,25 @@ def create_app() -> Any:
             sup = _Supervisor("sentinel", _run_sentinel)
             STATE.supervisors["sentinel"] = sup
             sup.start()
+
+        # Inbound Telegram bot. Started only if (a) the env opt-in is on
+        # AND (b) the bot is actually configured — token + allowed user id.
+        # The supervisor exits cleanly when the bot is not configured, so
+        # the absence of credentials is not an error.
+        if os.environ.get("TELEGRAM_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
+            try:
+                from core.telegram_bot import is_enabled as _tg_enabled
+                _tg_configured = _tg_enabled()
+            except Exception as e:  # noqa: BLE001
+                STATE.mount_errors.append(f"telegram_bot import: {e!r}")
+                _tg_configured = False
+            if _tg_configured:
+                sup = _Supervisor("telegram", _run_telegram)
+                STATE.supervisors["telegram"] = sup
+                sup.start()
+            else:
+                log.info("telegram bot not configured "
+                         "(set TELEGRAM_BOT_TOKEN and TELEGRAM_USER_ID to enable)")
 
         STATE.lifespan_complete = True
         log.info("lifespan.ready: port bound, daemons supervised")
