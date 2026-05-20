@@ -227,20 +227,58 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
     # Attempt to pass MCP tools if the router is wired up. We tolerate
     # failure — the agent works fine without tools, and a broken MCP
     # router must never take the chat down.
+    #
+    # NOTE: Anthropic's API requires tool names to match the regex
+    # ^[a-zA-Z0-9_-]{1,128}$ — dots are NOT permitted. The MCP router
+    # emits qualified names like "filesystem.write_file", so we sanitize
+    # by replacing "." with "__" and register a bridge handler in
+    # core.agent._MCP_TOOLS that dispatches via the router using the
+    # ORIGINAL qualified name. This keeps the wire format API-legal while
+    # preserving routing semantics.
     tools: Optional[list[dict[str, Any]]] = None
     try:
         from mcp.router import get_router  # type: ignore
-        tools = [
-            {
-                "name": t["qualified"],
+        from core.agent import register_mcp_tool  # type: ignore
+
+        router = get_router()
+        raw_tools = router.list_tools()
+
+        def _sanitize(qualified: str) -> str:
+            # Replace any character not in [A-Za-z0-9_-] with "_".
+            # Dots in qualified names become "__" so we can still tell
+            # server/tool apart visually in logs.
+            out = []
+            for ch in qualified:
+                if ch.isalnum() or ch in ("_", "-"):
+                    out.append(ch)
+                elif ch == ".":
+                    out.append("__")
+                else:
+                    out.append("_")
+            sanitized = "".join(out)[:128]
+            return sanitized or "tool"
+
+        def _make_dispatcher(qualified_name: str):
+            async def _dispatch(args: dict[str, Any]) -> Any:
+                return await router.dispatch(qualified_name, args)
+            return _dispatch
+
+        tools = []
+        for t in raw_tools:
+            qualified = t["qualified"]
+            safe = _sanitize(qualified)
+            tools.append({
+                "name": safe,
                 "description": t.get("description", ""),
                 "input_schema": t.get("input_schema",
                                       {"type": "object",
                                        "properties": {},
                                        "additionalProperties": True}),
-            }
-            for t in get_router().list_tools()
-        ]
+            })
+            # Bridge: when the agent dispatches `safe`, route to the real
+            # qualified name through the MCP router.
+            register_mcp_tool(safe, _make_dispatcher(qualified))
+
         if not tools:
             tools = None
     except Exception:

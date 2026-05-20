@@ -31,6 +31,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+# ─── Load .env at import time ─────────────────────────────────────────────
+#
+# python-dotenv is listed in requirements.txt. We import it defensively so
+# the module still loads on a fresh checkout where the dep isn't installed
+# yet (e.g. during CI before `pip install`). The .env lookup walks upward
+# from this file so it works regardless of CWD when the agent is invoked.
+try:
+    from dotenv import load_dotenv as _load_dotenv  # type: ignore
+    _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+    if _ENV_FILE.is_file():
+        _load_dotenv(_ENV_FILE, override=False)
+    else:
+        # Fall back to dotenv's own search (CWD-upwards).
+        _load_dotenv(override=False)
+except Exception:
+    # No dotenv installed, or unreadable .env — env vars set by the shell
+    # / systemd still apply, so this is non-fatal.
+    pass
+
 
 # ─── Constants ────────────────────────────────────────────────────────────
 
@@ -219,6 +238,11 @@ def _load_api_key() -> str:
 def build_async_client() -> Any:
     """Construct an AsyncAnthropic client. Import is deferred so the module
     loads even when the SDK isn't installed yet (e.g. CI before pip install).
+
+    Honors ANTHROPIC_BASE_URL — when set, the client is pointed at the
+    given gateway (e.g. an Anthropic-compatible proxy) instead of the
+    default https://api.anthropic.com. The SDK reads this env var itself,
+    but we pass it explicitly so the behavior is obvious from the trace.
     """
     try:
         from anthropic import AsyncAnthropic
@@ -227,7 +251,16 @@ def build_async_client() -> Any:
             "anthropic SDK not installed; pip install anthropic"
         ) from e
     api_key = _load_api_key()
-    return AsyncAnthropic(api_key=api_key)
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    kwargs: dict[str, Any] = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+        try:
+            get_logger().info("anthropic.client.base_url",
+                              extra={"base_url": base_url})
+        except Exception:
+            pass
+    return AsyncAnthropic(**kwargs)
 
 
 # ─── Tenacity retry decorator ─────────────────────────────────────────────
@@ -463,12 +496,32 @@ DESTRUCTIVE_TOOLS: set[str] = {
 
 
 def is_destructive(tool_name: str) -> bool:
-    """Return True if the tool needs a pre-mutation snapshot."""
+    """Return True if the tool needs a pre-mutation snapshot.
+
+    Handles three name shapes:
+      * ``"write_file"``               — bare
+      * ``"filesystem.write_file"``    — dotted (legacy MCP qualified)
+      * ``"filesystem__write_file"``   — sanitized for the Anthropic API
+        (dots are illegal in tool names per ``^[a-zA-Z0-9_-]{1,128}$``,
+        so the Telegram bridge rewrites ``.`` → ``__``)
+    """
     if tool_name in DESTRUCTIVE_TOOLS:
         return True
     # Match bare name when caller passed qualified, and vice versa.
-    bare = tool_name.split(".", 1)[-1]
-    return bare in DESTRUCTIVE_TOOLS
+    bare_dot = tool_name.split(".", 1)[-1]
+    if bare_dot in DESTRUCTIVE_TOOLS:
+        return True
+    bare_us = tool_name.split("__", 1)[-1]
+    if bare_us in DESTRUCTIVE_TOOLS:
+        return True
+    # Also reconstruct the dotted qualified form from a sanitized name
+    # and check the set directly (e.g. "filesystem__write_file" →
+    # "filesystem.write_file").
+    if "__" in tool_name:
+        rebuilt = tool_name.replace("__", ".")
+        if rebuilt in DESTRUCTIVE_TOOLS:
+            return True
+    return False
 
 
 async def _create_snapshot(reason: str) -> Optional[str]:
