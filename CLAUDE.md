@@ -161,16 +161,22 @@ After every significant task:
 
 ---
 
-## Model Routing
+## Model
 
-| Task class | Model | Rationale |
-|------------|-------|-----------|
-| Conversation, STT/TTS routing, quick lookups | Claude Haiku (latest) | ~350ms TTFT |
-| File ops, code review, log analysis | Claude Sonnet (latest) | balanced |
-| Architecture, deep debugging, novel design | Claude Opus (latest) | reasoning depth |
+JARVIS v7.0 is **Haiku-only**. Every Claude call — agent loop, voice pipeline,
+CLI helpers — uses `claude-haiku-4-5`.
 
-All model calls route to Anthropic. Router lives in `core/router.py`. Routing
-decisions are logged.
+| Surface | File | Constant | Override |
+|---------|------|----------|----------|
+| Agent loop | `core/agent.py` | `DEFAULT_MODEL` | `JARVIS_AGENT_MODEL` env |
+| Voice pipeline | `voice/pipeline.py` | `DEFAULT_LLM_MODEL` | — |
+| CLI helpers | `cursor.py`, `fix_and_push.py` | `MODEL` | `ANTHROPIC_MODEL` env |
+
+Rationale: Haiku's ~350 ms TTFT is what makes the voice channel hit its
+< 500 ms end-to-end target, and it's cheap enough to leave running in the
+KAIROS background loop. If a future task class genuinely needs Sonnet or
+Opus, introduce a router (`core/router.py`) and update this table — don't
+drift a doc that claims routing the code doesn't do.
 
 ---
 

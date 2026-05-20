@@ -204,15 +204,14 @@ procedural. See `core/dream.py`.
 
 ---
 
-## Model routing
+## Model
 
-| Task class | Model |
-|------------|-------|
-| Conversation, STT/TTS routing | Claude Haiku |
-| File ops, code review, logs | Claude Sonnet |
-| Architecture, deep debugging | Claude Opus |
+JARVIS v7.0 uses **Claude Haiku** (`claude-haiku-4-5`) for every model call —
+the agent loop in `core/agent.py` and the voice pipeline in `voice/pipeline.py`.
+Haiku is chosen for its sub-500 ms TTFT, which the voice channel requires.
 
-Routing decisions are logged. The router is in `core/router.py`.
+Override the model with the `JARVIS_AGENT_MODEL` env var (agent loop) or
+`ANTHROPIC_MODEL` (CLI helpers). All model calls go to Anthropic.
 
 ---
 
