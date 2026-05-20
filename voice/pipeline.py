@@ -49,7 +49,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Protocol
 TTFA_TARGET_MS = 500
 
 DEFAULT_STT_MODEL = "nova-3"
-DEFAULT_LLM_MODEL = "claude-haiku-latest"   # picked for sub-500 ms TTFT
+DEFAULT_LLM_MODEL = "claude-haiku-4-5"   # picked for sub-500 ms TTFT
 DEFAULT_TTS_MODEL = "eleven_flash_v2_5"
 DEFAULT_TTS_VOICE = "21m00Tcm4TlvDq8ikWAM"  # Rachel — public default
 DEFAULT_AUDIO_FORMAT = "linear16"           # 16-bit PCM @ 16 kHz mono in

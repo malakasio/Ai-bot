@@ -9,7 +9,7 @@ if not KEY:
 URL = "https://api.anthropic.com/v1/messages"
 
 # Model name via environment, with fallback
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7")
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 
 
 def run_agent():

@@ -48,7 +48,7 @@ DEFAULT_INPUT_TOKEN_LIMIT: int = 180_000   # Claude-Sonnet/Opus context cap
 DEFAULT_OUTPUT_TOKEN_BUDGET: int = 4_096
 
 # Default model — overridable via env JARVIS_AGENT_MODEL.
-DEFAULT_MODEL: str = "claude-sonnet-latest"
+DEFAULT_MODEL: str = "claude-haiku-4-5"
 
 TRACE_LOG_PATH = Path("/var/log/jarvis_agent.trace")
 TRACE_LOG_FALLBACK = Path.home() / ".local/share/jarvis/jarvis_agent.trace"

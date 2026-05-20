@@ -68,9 +68,9 @@ class LLMConfig:
     gemini_api_key: str = field(default_factory=lambda: _read_credential("gemini_key", "GEMINI_API_KEY"))
 
     # Current Claude model IDs (May 2026)
-    haiku_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_HAIKU_MODEL", "claude-haiku-4-5-20251001"))
-    sonnet_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_SONNET_MODEL", "claude-sonnet-4-6"))
-    opus_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_OPUS_MODEL", "claude-opus-4-7"))
+    haiku_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_HAIKU_MODEL", "claude-haiku-4-5"))
+    sonnet_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_SONNET_MODEL", "claude-haiku-4-5"))
+    opus_model: str = field(default_factory=lambda: os.environ.get("CLAUDE_OPUS_MODEL", "claude-haiku-4-5"))
     gpt_fallback: str = "gpt-4o-mini"
     gemini_fallback: str = "gemini/gemini-1.5-flash"
 
