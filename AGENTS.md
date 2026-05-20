@@ -17,6 +17,6 @@ JARVIS v6.0 is a Python 3.11 FastAPI autonomous assistant. See `README.md` for f
 - **PYTHONPATH must include `src/`** — the package lives under `src/jarvis/`.
 - **JARVIS_HOME** — set to a writable temp dir (e.g. `/tmp/jarvis_dev`). The app creates `data/`, `logs/`, `skills/` etc. under this path.
 - **DB writer** — started automatically by the FastAPI lifespan handler. All DB-touching endpoints require it.
-- **LLM** — set `GROQ_API_KEY` (free at console.groq.com) for chat to work without a local Ollama instance.
+- **LLM** — set `ANTHROPIC_API_KEY` (https://console.anthropic.com). JARVIS v7.0 routes all model calls to Anthropic; no other provider is wired into the v7 runtime.
 - **edge-tts** — `test_tts_produces_audio` skips gracefully in cloud VMs with no egress to Microsoft's speech API.
 - **Embedding** — `sentence-transformers` is excluded from `requirements-railway.txt`. Memory search falls back to FTS5 keyword-only when embeddings are unavailable.

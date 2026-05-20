@@ -168,9 +168,9 @@ After every significant task:
 | Conversation, STT/TTS routing, quick lookups | Claude Haiku (latest) | ~350ms TTFT |
 | File ops, code review, log analysis | Claude Sonnet (latest) | balanced |
 | Architecture, deep debugging, novel design | Claude Opus (latest) | reasoning depth |
-| Simple offline tasks | Local LLM via Ollama | free, private |
 
-Router lives in `core/router.py`. Routing decisions are logged.
+All model calls route to Anthropic. Router lives in `core/router.py`. Routing
+decisions are logged.
 
 ---
 

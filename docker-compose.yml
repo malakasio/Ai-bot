@@ -14,7 +14,6 @@ version: '3.9'
 #   --profile app         also run jarvis_core in a container
 #   --profile sandbox     command-execution sandbox (Ubuntu)
 #   --profile lab         Kali sandbox (no external network)
-#   --profile ollama      local LLM
 #   --profile production  Caddy reverse proxy (HTTPS)
 #   --profile backup      Litestream replication
 #   --profile computer-use Xvfb display server for computer-use tools
@@ -146,26 +145,6 @@ services:
     profiles:
       - lab
 
-  # ─── Ollama (free local LLM) ──────────────────────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    container_name: jarvis-ollama
-    volumes:
-      - ollama_data:/root/.ollama
-    ports:
-      - "11434:11434"
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-    networks:
-      - jarvis_internal
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-    profiles:
-      - ollama
-
   # ─── Xvfb (computer-use / browser automation) ─────────────────────────
   xvfb:
     image: ubuntu:22.04
@@ -222,7 +201,6 @@ volumes:
   postgres_data:
   n8n_data:
   jarvis_data:
-  ollama_data:
   caddy_data:
   caddy_config:
 

@@ -211,7 +211,6 @@ procedural. See `core/dream.py`.
 | Conversation, STT/TTS routing | Claude Haiku |
 | File ops, code review, logs | Claude Sonnet |
 | Architecture, deep debugging | Claude Opus |
-| Simple offline tasks | Local LLM via Ollama |
 
 Routing decisions are logged. The router is in `core/router.py`.
 
