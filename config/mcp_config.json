@@ -25,7 +25,10 @@
         "stat",
         "delete"
       ],
-      "requires_snapshot_for": ["write_file", "delete"]
+      "requires_snapshot_for": [
+        "write_file",
+        "delete"
+      ]
     },
     {
       "name": "network",
@@ -49,7 +52,9 @@
         "port_check",
         "nmap_scan"
       ],
-      "lab_only_tools": ["nmap_scan"]
+      "lab_only_tools": [
+        "nmap_scan"
+      ]
     },
     {
       "name": "automation",
@@ -66,6 +71,27 @@
         "n8n_trigger",
         "apify_run_actor",
         "apify_get_dataset"
+      ]
+    },
+    {
+      "name": "n8n",
+      "enabled": true,
+      "module": "mcp.n8n_mcp",
+      "description": "n8n workflow automation: create, list, get, update, delete, activate/deactivate, and execute workflows; list and retrieve executions.",
+      "env_passthrough": [
+        "N8N_BASE_URL",
+        "N8N_API_KEY"
+      ],
+      "tools": [
+        "n8n_list_workflows",
+        "n8n_get_workflow",
+        "n8n_create_workflow",
+        "n8n_update_workflow",
+        "n8n_delete_workflow",
+        "n8n_activate_workflow",
+        "n8n_execute_workflow",
+        "n8n_list_executions",
+        "n8n_get_execution"
       ]
     }
   ]
