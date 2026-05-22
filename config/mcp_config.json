@@ -1,7 +1,7 @@
 {
   "$schema": "./mcp_config.schema.json",
   "version": 1,
-  "description": "JARVIS v7.0 MCP server registry. The router loads enabled entries, imports each module, and calls its get_server() factory.",
+  "description": "JARVIS v7.0 MCP server registry. The router loads enabled entries, imports each module, and calls its get_server() factory. The n8n server uses a stdio bridge to the real czlonkowski/n8n-mcp npm package.",
   "defaults": {
     "request_timeout_s": 30
   },
@@ -77,7 +77,7 @@
       "name": "n8n",
       "enabled": true,
       "module": "mcp.n8n_mcp",
-      "description": "n8n workflow automation: create, list, get, update, delete, activate/deactivate, and execute workflows; list and retrieve executions.",
+      "description": "n8n workflow automation via czlonkowski/n8n-mcp stdio bridge. Full CRUD, execution, credential, tag, variable, data-table management, AI workflow generation, and security audit.",
       "env_passthrough": [
         "N8N_BASE_URL",
         "N8N_API_KEY"
@@ -86,13 +86,27 @@
         "n8n_list_workflows",
         "n8n_get_workflow",
         "n8n_create_workflow",
-        "n8n_update_workflow",
+        "n8n_update_full_workflow",
+        "n8n_update_partial_workflow",
         "n8n_delete_workflow",
         "n8n_activate_workflow",
+        "n8n_deactivate_workflow",
         "n8n_execute_workflow",
         "n8n_list_executions",
-        "n8n_get_execution"
-      ]
+        "n8n_get_execution",
+        "n8n_delete_execution",
+        "n8n_manage_tags",
+        "n8n_manage_variables",
+        "n8n_manage_credentials",
+        "n8n_manage_data_tables",
+        "n8n_generate_workflow",
+        "n8n_audit_instance"
+      ],
+      "known_upstream": {
+        "package": "czlonkowski/n8n-mcp",
+        "version": "2.55.0",
+        "bin": "n8n-mcp"
+      }
     }
   ]
 }
