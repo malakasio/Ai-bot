@@ -251,6 +251,15 @@ def create_app() -> Any:
         STATE.lifespan_started = True
         log.info("lifespan.start")
 
+        # 0) Init PostgreSQL connection pool (asyncpg).
+        try:
+            from core import database as _db
+            await _db.init()
+            log.info("lifespan.db_pool_ready")
+        except Exception as e:
+            STATE.mount_errors.append(f"db_pool: {e!r}")
+            log.warning("lifespan.db_pool_failed: %r", e)
+
         # PaaS detection — Railway / Render / Fly all inject $PORT. When
         # we're on a managed platform we don't have iptables, auth.log,
         # or systemd, so default the Sentinel to dry-run instead of
@@ -337,6 +346,13 @@ def create_app() -> Any:
             yield
         finally:
             log.info("lifespan.stop")
+            # Close DB pool before shutting down daemons.
+            try:
+                from core import database as _db
+                await _db.close()
+                log.info("lifespan.db_pool_closed")
+            except Exception as e:
+                log.warning("lifespan.db_pool_close_failed: %r", e)
             await asyncio.gather(
                 *(s.stop() for s in STATE.supervisors.values()),
                 return_exceptions=True,
@@ -472,12 +488,55 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
             ]
         except Exception:
             mcp_tools = None
+
+        # ── Load last 10 episodes as conversation context ────────────────
+        context = ""
+        try:
+            from core.memory import recent_episodes
+            episodes = await recent_episodes(limit=10)
+            if episodes:
+                lines = [
+                    f"[{ep['ts']}] {ep['actor']}/{ep['tool']}: "
+                    f"{ep.get('input', '')} -> {ep.get('output', '')}"
+                    for ep in episodes
+                ]
+                context = (
+                    "Recent conversation history (last 10 episodes):\n"
+                    + "\n".join(lines)
+                )
+        except Exception:
+            pass  # memory store unavailable — proceed without context
+
+        system_prompt = payload.get("system")
+        if context:
+            system_prompt = (
+                f"{context}\n\n{system_prompt or ''}"
+            ).strip()
+
         run = await run_jarvis_core(
             prompt,
             tools=mcp_tools,
-            system=payload.get("system"),
+            system=system_prompt or None,
             max_iterations=int(payload.get("max_iterations", 10)),
         )
+
+        # ── Store this episode ──────────────────────────────────────────
+        try:
+            from core.memory import Episode as _Ep, store_episode
+            await store_episode(_Ep(
+                actor="user",
+                tool="agent/run",
+                input=prompt[:1024],
+                output=(run.final_message or "")[:2048],
+                metadata={
+                    "run_id": run.run_id,
+                    "iterations": run.iterations,
+                    "stopped_reason": run.stopped_reason,
+                },
+            ))
+        except Exception:
+            pass  # memory store unavailable — non-fatal
+
         return {
             "run_id": run.run_id,
             "iterations": run.iterations,

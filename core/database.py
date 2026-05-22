@@ -20,7 +20,19 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 from typing import Any, Optional, Sequence
+
+# ─── Load .env at import time ─────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+    if _ENV_FILE.is_file():
+        _load_dotenv(_ENV_FILE, override=False)
+    else:
+        _load_dotenv(override=False)
+except Exception:
+    pass
 
 try:
     import asyncpg
