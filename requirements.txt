@@ -53,8 +53,9 @@ filelock==3.16.1
 
 # ─── OPTIONAL PAID APIs ───────────────────────────────────────────────────────
 # anthropic==0.40.0        # Claude API (set ANTHROPIC_API_KEY)
-# deepgram-sdk==3.9.0      # Deepgram STT (set DEEPGRAM_API_KEY)
-# elevenlabs==1.11.0       # ElevenLabs TTS (set ELEVENLABS_API_KEY)
+deepgram-sdk==3.9.0
+elevenlabs==1.11.0
+websockets==16.0
 # openai==1.59.3           # OpenAI fallback (set OPENAI_API_KEY)
 # litellm==1.56.1          # Multi-provider LLM routing
 

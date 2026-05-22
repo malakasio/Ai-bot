@@ -202,55 +202,109 @@ class DeepgramSTT:
 # ─── Claude streaming LLM ────────────────────────────────────────────────
 
 
-class ClaudeStreamLLM:
+class AgentCoreLLM:
+    """Routes voice prompts through run_jarvis_core instead of raw Anthropic.
+
+    This gives voice conversations access to all MCP tools, skills, and
+    memory — the same full agent loop that POST /agent/run uses.
+
+    Streaming: the pipeline expects an AsyncIterator[str], but the agent
+    loop returns a single final_message string. To keep the streaming
+    contract, we yield the response in word-chunks so TTS can start
+    playing audio as quickly as possible.
+    """
+
     def __init__(
         self,
-        api_key: Optional[str] = None,
         *,
         model: str = DEFAULT_LLM_MODEL,
         max_tokens: int = 512,
         system: Optional[str] = None,
+        max_iterations: int = 5,
     ) -> None:
-        # Re-use the agent's credential resolver if present so systemd
-        # LoadCredential works the same way for the voice path.
-        if api_key is None:
-            try:
-                from core import agent as _agent
-                api_key = _agent._load_api_key()
-            except Exception:
-                api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if not api_key:
-            raise PipelineError("Anthropic API key not configured")
-        self.api_key = api_key
         self.model = model
         self.max_tokens = max_tokens
         self.system = system
+        self.max_iterations = max_iterations
 
     async def stream(
         self, prompt: str, *, system: Optional[str] = None
     ) -> AsyncIterator[str]:
+        # Resolve MCP tools lazily to avoid import-time side effects.
+        tools = None
         try:
-            from anthropic import AsyncAnthropic
-        except ImportError as e:
-            raise PipelineError(
-                "anthropic SDK missing; pip install anthropic") from e
-        client = AsyncAnthropic(api_key=self.api_key)
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": self.max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }
+            from mcp.router import get_router
+            tools = [
+                {
+                    "name": t["qualified"],
+                    "description": t.get("description", ""),
+                    "input_schema": t.get("input_schema",
+                                          {"type": "object",
+                                           "properties": {},
+                                           "additionalProperties": True}),
+                }
+                for t in get_router().list_tools()
+            ]
+        except Exception:
+            pass
+
         sys_p = system or self.system
-        if sys_p:
-            kwargs["system"] = sys_p
-        async with client.messages.stream(**kwargs) as stream:
-            async for delta in stream.text_stream:
-                if delta:
-                    yield delta
 
+        # Prepend recent episodic memory as conversation context.
+        try:
+            from core.memory import recent_episodes
+            episodes = await recent_episodes(limit=10)
+            if episodes:
+                lines_ctx = [
+                    f"[{ep['ts']}] {ep['actor']}/{ep['tool']}: "
+                    f"{ep.get('input', '')[:200]} -> {ep.get('output', '')[:200]}"
+                    for ep in episodes
+                ]
+                ctx = (
+                    "Recent conversation history (last 10 episodes):\n"
+                    + "\n".join(lines_ctx)
+                )
+                sys_p = f"{ctx}\n\n{sys_p or ''}".strip()
+        except Exception:
+            pass
 
-# ─── ElevenLabs Flash v2.5 (streaming TTS) ───────────────────────────────
+        from core.agent import run_jarvis_core
+        try:
+            run = await run_jarvis_core(
+                prompt,
+                model=self.model,
+                system=sys_p or None,
+                tools=tools,
+                max_iterations=self.max_iterations,
+            )
+        except Exception as e:
+            raise PipelineError(f"agent run failed: {e!r}") from e
 
+        response = run.final_message or "(no response)"
+
+        # Persist this turn as an episode.
+        try:
+            from core.memory import Episode as _Ep, store_episode
+            await store_episode(_Ep(
+                actor="user",
+                tool="voice",
+                input=prompt[:1024],
+                output=response[:2048],
+                metadata={
+                    "run_id": run.run_id,
+                    "iterations": run.iterations,
+                    "stopped_reason": run.stopped_reason,
+                },
+            ))
+        except Exception:
+            pass
+
+        # Yield in word-chunks so TTS can start playing immediately.
+        words = response.split()
+        for i in range(0, len(words), TTS_FLUSH_MIN_CHARS):
+            chunk = " ".join(words[i:i + TTS_FLUSH_MIN_CHARS])
+            if chunk:
+                yield chunk + " "
 
 class ElevenLabsTTS:
     def __init__(
@@ -390,7 +444,7 @@ class VoicePipeline:
         """Build a pipeline from env-configured providers."""
         return cls(
             stt=DeepgramSTT(),
-            llm=ClaudeStreamLLM(system=system),
+            llm=AgentCoreLLM(system=system),
             tts=ElevenLabsTTS(),
             system=system,
         )
