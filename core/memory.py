@@ -2,6 +2,7 @@
 
 Thin async functions over unified database adapter (PostgreSQL/SQLite).
 Uses src.jarvis.memory.database for backend abstraction.
+Now includes embeddings support from core/embeddings.py.
 
 The three functions named in the goal are surfaced at module top:
     store_episode()

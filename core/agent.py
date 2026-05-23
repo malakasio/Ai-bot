@@ -12,6 +12,7 @@ Responsibilities:
     operator via Telegram.
   * Emit a structured trace to /var/log/jarvis_agent.trace (one JSON
     object per line, fsync-safe append).
+  * Collect metrics via core/metrics.py for observability.
 
 This module is import-safe even if anthropic / tenacity / httpx are not
 installed yet — symbol resolution happens at call time so the package
@@ -845,6 +846,16 @@ async def run_jarvis_core(
                             usage, "input_tokens", None)
                         _llm_record["output_tokens"] = getattr(
                             usage, "output_tokens", None)
+                        # Collect metrics
+                        try:
+                            from core.metrics import get_metrics
+                            metrics = get_metrics()
+                            metrics.llm_requests_total.inc()
+                            input_tok = getattr(usage, "input_tokens", 0)
+                            output_tok = getattr(usage, "output_tokens", 0)
+                            metrics.record_llm_cost(model, input_tok, output_tok)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
             run.breaker.record_success()
@@ -855,7 +866,21 @@ async def run_jarvis_core(
                 "consecutive_failures": run.breaker.consecutive_failures,
                 "exc": repr(e),
             })
+            # Collect error metrics
+            try:
+                from core.metrics import get_metrics
+                metrics = get_metrics()
+                metrics.llm_errors_total.inc()
+                metrics.record_error()
+            except Exception:
+                pass
             if run.breaker.tripped:
+                # Record circuit breaker trip
+                try:
+                    from core.metrics import get_metrics
+                    get_metrics().circuit_breaker_trips.inc()
+                except Exception:
+                    pass
                 run.stopped_reason = "circuit_breaker_tripped"
                 timeout = os.environ.get("JARVIS_API_TIMEOUT", "300.0")
                 await send_telegram_alert(
