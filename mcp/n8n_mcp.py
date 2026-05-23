@@ -86,6 +86,7 @@ class _McpClient:
         env = os.environ.copy()
         env["N8N_API_URL"] = f"{base}/api/v1"
         env.setdefault("N8N_API_KEY", "")
+        env["WEBHOOK_SECURITY_MODE"] = "moderate"  # Allow localhost connections
 
         start_ts = time.monotonic()
         self.proc = await asyncio.create_subprocess_exec(
