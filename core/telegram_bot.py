@@ -281,7 +281,10 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
 
         if not tools:
             tools = None
-    except Exception:
+        else:
+            _log().info(f"Loaded {len(tools)} MCP tools for agent")
+    except Exception as e:
+        _log().warning(f"Failed to load MCP tools: {e}")
         tools = None
 
     try:
