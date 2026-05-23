@@ -195,7 +195,7 @@ async def _ensure_browser() -> tuple[Browser, BrowserContext, Page]:
 )
 async def browser_navigate(args: dict[str, Any]) -> dict[str, Any]:
     url = require_str(args["url"], "url", max_len=2048)
-    wait_for = args.get("wait_for", "load")
+    wait_for = args.get("wait_for", "networkidle")  # Default to networkidle for dynamic content
     require_in(wait_for, "wait_for", ["load", "domcontentloaded", "networkidle"])
 
     # Security check
@@ -211,8 +211,8 @@ async def browser_navigate(args: dict[str, Any]) -> dict[str, Any]:
             return err("navigation failed (no response)", code="navigation_failed")
 
         # Additional wait for dynamic content (JS frameworks, lazy-loaded images)
-        # This ensures screenshots capture fully rendered pages
-        await asyncio.sleep(2.0)
+        # YouTube and modern SPAs need extra time beyond networkidle
+        await asyncio.sleep(3.0)
 
         return ok({
             "url": page.url,
@@ -329,6 +329,9 @@ async def browser_screenshot(args: dict[str, Any]) -> dict[str, Any]:
 
     try:
         _, _, page = await _ensure_browser()
+
+        # Wait for any pending animations/renders to complete
+        await asyncio.sleep(1.0)
 
         if selector:
             element = await page.query_selector(selector)
