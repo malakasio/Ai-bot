@@ -115,8 +115,8 @@ _UPSTREAM_TOOLS: list[dict[str, Any]] = [
     {"name": "validate_workflow", "desc": "Validate a workflow structure.", "schema": {"type": "object", "properties": {"workflow": {"type": "object"}}, "required": ["workflow"]}},
 ]
 
-# LOCAL REST TOOLS (4): Provided by local REST client
-# These query execution history, workflows, and create workflows (n8n public API supports read operations only).
+# LOCAL REST TOOLS (5): Provided by local REST client
+# These query execution history, workflows, create workflows, and manage credentials.
 # Note: Workflow execution is NOT supported by n8n public API.
 # Use n8n_trigger tool (automation_mcp.py) for webhook-based execution instead.
 
@@ -124,7 +124,8 @@ _LOCAL_REST_TOOLS: list[dict[str, Any]] = [
     {"name": "n8n_list_executions", "desc": "List workflow executions. Filter by workflow_id, status, limit.", "schema": {"type": "object", "properties": {"workflow_id": {"type": "string"}, "status": {"type": "string", "enum": ["error", "success", "running", "waiting"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
     {"name": "n8n_get_execution", "desc": "Get a single execution by ID with full node-by-node data.", "schema": {"type": "object", "properties": {"execution_id": {"type": "string"}}, "required": ["execution_id"]}},
     {"name": "n8n_list_workflows", "desc": "List all workflows with optional filters (active, tags, name search).", "schema": {"type": "object", "properties": {"active": {"type": "boolean", "description": "Filter by active status"}, "tags": {"type": "string", "description": "Comma-separated tag names"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Max workflows to return (default: 100)"}}}},
-    {"name": "n8n_create_workflow", "desc": "Create a new n8n workflow. Returns workflow ID and metadata. Note: Workflow will be created as inactive - activate manually in n8n UI.", "schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Workflow name"}, "nodes": {"type": "array", "description": "Array of workflow nodes"}, "connections": {"type": "object", "description": "Node connections object"}, "settings": {"type": "object", "description": "Workflow settings (optional)"}}, "required": ["name", "nodes", "connections"]}},
+    {"name": "n8n_create_workflow", "desc": "Create a new n8n workflow. Automatically links Telegram credentials if workflow contains Telegram nodes. Returns workflow ID and metadata. Note: Workflow will be created as inactive - activate manually in n8n UI.", "schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Workflow name"}, "nodes": {"type": "array", "description": "Array of workflow nodes"}, "connections": {"type": "object", "description": "Node connections object"}, "settings": {"type": "object", "description": "Workflow settings (optional)"}, "telegram_bot_token": {"type": "string", "description": "Telegram bot token (optional, for auto-creating credential)"}}, "required": ["name", "nodes", "connections"]}},
+    {"name": "n8n_create_credential", "desc": "Create a Telegram API credential in n8n. Returns credential ID. Required for Telegram nodes in workflows.", "schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Credential name"}, "bot_token": {"type": "string", "description": "Telegram bot token from @BotFather"}}, "required": ["name", "bot_token"]}},
 ]
 
 # ─── Lazy subprocess client ──────────────────────────────────────────────
@@ -412,7 +413,7 @@ async def _rest_list_workflows(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _rest_create_workflow(args: dict[str, Any]) -> dict[str, Any]:
-    """Create workflow via REST API."""
+    """Create workflow via REST API with automatic Telegram credential linking."""
     err_msg = _check_config()
     if err_msg:
         return err(err_msg, code="missing_config")
@@ -422,6 +423,7 @@ async def _rest_create_workflow(args: dict[str, Any]) -> dict[str, Any]:
     nodes = args.get("nodes", [])
     connections = args.get("connections", {})
     settings = args.get("settings", {})
+    telegram_bot_token = args.get("telegram_bot_token")
 
     if not isinstance(nodes, list) or len(nodes) == 0:
         return err("nodes must be a non-empty array", code="invalid_input")
@@ -429,6 +431,43 @@ async def _rest_create_workflow(args: dict[str, Any]) -> dict[str, Any]:
         return err("connections must be an object", code="invalid_input")
     if not isinstance(settings, dict):
         return err("settings must be an object", code="invalid_input")
+
+    # Check if workflow has Telegram nodes and auto-link credentials
+    telegram_credential_id = None
+    has_telegram_nodes = any(
+        node.get("type") == "n8n-nodes-base.telegram"
+        for node in nodes
+    )
+
+    if has_telegram_nodes:
+        # Try to get existing Telegram credential or create new one
+        if telegram_bot_token:
+            # Create new credential with provided token
+            cred_result = await _rest_create_credential({
+                "name": f"Telegram Bot - {name}",
+                "bot_token": telegram_bot_token
+            })
+            if cred_result.get("ok"):
+                telegram_credential_id = cred_result["data"].get("id")
+        else:
+            # Try to find existing Telegram credential
+            creds_resp = await _n8n_request("GET", "/credentials?type=telegramApi")
+            if creds_resp.get("ok"):
+                creds_data = creds_resp["data"]
+                creds = creds_data.get("data", creds_data) if isinstance(creds_data, dict) else creds_data
+                if isinstance(creds, list) and len(creds) > 0:
+                    telegram_credential_id = creds[0].get("id")
+
+        # Link credential to Telegram nodes
+        if telegram_credential_id:
+            for node in nodes:
+                if node.get("type") == "n8n-nodes-base.telegram":
+                    if "credentials" not in node:
+                        node["credentials"] = {}
+                    node["credentials"]["telegramApi"] = {
+                        "id": telegram_credential_id,
+                        "name": f"Telegram Bot - {name}"
+                    }
 
     # Build workflow payload
     payload = {
@@ -456,11 +495,46 @@ async def _rest_create_workflow(args: dict[str, Any]) -> dict[str, Any]:
     })
 
 
+async def _rest_create_credential(args: dict[str, Any]) -> dict[str, Any]:
+    """Create Telegram API credential via REST API."""
+    err_msg = _check_config()
+    if err_msg:
+        return err(err_msg, code="missing_config")
+
+    # Validate required fields
+    name = require_str(args["name"], "name", max_len=128)
+    bot_token = require_str(args["bot_token"], "bot_token", max_len=256)
+
+    # Build credential payload for Telegram API
+    payload = {
+        "name": name,
+        "type": "telegramApi",
+        "data": {
+            "accessToken": bot_token
+        }
+    }
+
+    resp = await _n8n_request("POST", "/credentials", json_body=payload)
+    if "_error" in resp:
+        return err(f"n8n request failed: {resp['_error']}", code="http_error")
+    if not resp["ok"]:
+        return err(f"n8n returned HTTP {resp['status']}", code="http_status",
+                   detail=resp["data"])
+
+    data = resp["data"]
+    return ok({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "type": data.get("type"),
+        "created": data.get("createdAt")
+    })
+
+
 # ─── Tool handler factory ────────────────────────────────────────────────
 
 def _make_handler(tool_name: str):
     """Return an async handler that routes to either REST or stdio bridge."""
-    # Route execution history and workflow tools to local REST client
+    # Route execution history, workflow, and credential tools to local REST client
     if tool_name == "n8n_list_executions":
         return _rest_list_executions
     elif tool_name == "n8n_get_execution":
@@ -468,6 +542,9 @@ def _make_handler(tool_name: str):
     elif tool_name == "n8n_list_workflows":
         return _rest_list_workflows
     elif tool_name == "n8n_create_workflow":
+        return _rest_create_workflow
+    elif tool_name == "n8n_create_credential":
+        return _rest_create_credential
         return _rest_create_workflow
 
     # Route all other tools to upstream stdio bridge
@@ -531,7 +608,7 @@ async def call_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     """
     _register()  # Ensure tools are registered
 
-    # Route execution history and workflow tools to REST handlers
+    # Route execution history, workflow, and credential tools to REST handlers
     if tool_name == "n8n_list_executions":
         return await _rest_list_executions(args)
     elif tool_name == "n8n_get_execution":
@@ -540,6 +617,8 @@ async def call_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         return await _rest_list_workflows(args)
     elif tool_name == "n8n_create_workflow":
         return await _rest_create_workflow(args)
+    elif tool_name == "n8n_create_credential":
+        return await _rest_create_credential(args)
 
     # Route all other tools to stdio bridge
     client = _get_client()
