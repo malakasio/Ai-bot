@@ -153,13 +153,16 @@ async def upsert_semantic(
     Conflict resolution / merging (autoDream) is a separate routine; this
     is intentionally a plain insert.
     """
+    # Convert embedding to list if it's not already
+    embedding_list = list(embedding) if not isinstance(embedding, list) else embedding
+
     row = await database.fetchrow(
         """
         INSERT INTO jarvis_semantic_memory (
             kind, subject, content, confidence, embedding, metadata,
             source_episode
         ) VALUES (
-            $1, $2, $3, $4, $5::vector, $6::jsonb, $7
+            $1, $2, $3, $4, $5, $6::jsonb, $7
         )
         RETURNING id
         """,
@@ -167,7 +170,7 @@ async def upsert_semantic(
         subject,
         content,
         confidence,
-        _vector_literal(embedding),
+        embedding_list,
         json.dumps(metadata or {}),
         source_episode,
     )
@@ -183,10 +186,13 @@ async def semantic_search(
     """Top-K nearest neighbors by cosine distance.
 
     `embedding` is a sequence of floats with the dimension of the column
-    (1536 by default in the schema). Lower `distance` = more similar.
+    (384 by default in the schema). Lower `distance` = more similar.
     """
+    # Convert embedding to list
+    embedding_list = list(embedding) if not isinstance(embedding, list) else embedding
+
     clauses = ["confidence >= $2"]
-    args: list[Any] = [_vector_literal(embedding), float(min_confidence)]
+    args: list[Any] = [embedding_list, float(min_confidence)]
     if kind is not None:
         args.append(kind)
         clauses.append(f"kind = ${len(args)}")
@@ -195,10 +201,10 @@ async def semantic_search(
         f"""
         SELECT id, kind, subject, content, confidence, observation_count,
                metadata,
-               embedding <=> $1::vector AS distance
+               embedding <=> $1 AS distance
         FROM jarvis_semantic_memory
         WHERE {" AND ".join(clauses)}
-        ORDER BY embedding <=> $1::vector
+        ORDER BY embedding <=> $1
         LIMIT ${len(args)}
         """,
         *args,
