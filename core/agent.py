@@ -492,6 +492,10 @@ DESTRUCTIVE_TOOLS: set[str] = {
     # n8n / apify — fire side-effects
     "n8n_trigger", "automation.n8n_trigger",
     "apify_run_actor", "automation.apify_run_actor",
+    # computer-use — browser mutations
+    "browser_navigate", "computer-use.browser_navigate",
+    "browser_click", "computer-use.browser_click",
+    "browser_type", "computer-use.browser_type",
 }
 
 
@@ -556,6 +560,19 @@ async def _create_snapshot(reason: str) -> Optional[str]:
         return None
     tag = stdout.decode("utf-8", "replace").strip().splitlines()[-1:]
     return tag[0] if tag else None
+
+def _attr_or_dict(obj: Any, field: str, default: Any = None) -> Any:
+    """Safely read *field* from an SDK object (via getattr) or a dict (via .get).
+
+    Avoids the ``getattr(obj, f, None) or obj.get(f, d)`` pattern, which
+    crashes on ToolUseBlock when *field* exists but is a falsy value such
+    as an empty dict ``{}`` or an empty string ``""``.
+    """
+    if isinstance(obj, dict):
+        return obj.get(field, default)
+    attr = getattr(obj, field, None)
+    return default if attr is None else attr
+
 
 
 async def execute_mcp_tool(name: str, tool_input: dict[str, Any]) -> Any:
@@ -789,22 +806,18 @@ async def run_jarvis_core(
         tool_use_blocks: list[Any] = []
         text_chunks: list[str] = []
         for block in assistant_content:
-            btype = getattr(block, "type", None) or (
-                block.get("type") if isinstance(block, dict) else None
-            )
+            btype = _attr_or_dict(block, "type", None)
             if btype == "text":
-                text = getattr(block, "text", None) or (
-                    block.get("text") if isinstance(block, dict) else ""
-                )
+                text = _attr_or_dict(block, "text", "")
                 text_chunks.append(text or "")
                 assistant_blocks_for_message.append({"type": "text", "text": text or ""})
             elif btype == "tool_use":
                 tool_use_blocks.append(block)
                 assistant_blocks_for_message.append({
                     "type": "tool_use",
-                    "id": getattr(block, "id", None) or block.get("id"),
-                    "name": getattr(block, "name", None) or block.get("name"),
-                    "input": getattr(block, "input", None) or block.get("input", {}),
+                    "id": _attr_or_dict(block, "id"),
+                    "name": _attr_or_dict(block, "name"),
+                    "input": _attr_or_dict(block, "input", {}),
                 })
             else:
                 assistant_blocks_for_message.append(
@@ -828,9 +841,9 @@ async def run_jarvis_core(
         # Run all requested tools, append results.
         tool_results: list[dict[str, Any]] = []
         for tu in tool_use_blocks:
-            tu_id = getattr(tu, "id", None) or tu.get("id")
-            tu_name = getattr(tu, "name", None) or tu.get("name")
-            tu_input = getattr(tu, "input", None) or tu.get("input", {}) or {}
+            tu_id = _attr_or_dict(tu, "id")
+            tu_name = _attr_or_dict(tu, "name")
+            tu_input = _attr_or_dict(tu, "input", {})
             try:
                 result = await execute_mcp_tool(tu_name, tu_input)
                 run.breaker.record_success()
