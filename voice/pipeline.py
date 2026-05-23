@@ -252,12 +252,32 @@ class AgentCoreLLM:
 
         # Prepend recent episodic memory as conversation context.
         try:
-            from core.memory import recent_episodes
+            from core.memory import recent_episodes, semantic_episodes
+            import os
+
             episodes = await recent_episodes(limit=10)
+
+            # Feature flag: add semantic retrieval
+            if os.getenv("JARVIS_ENABLE_SEMANTIC_MEMORY", "false").lower() == "true":
+                try:
+                    # Use transcript as query for semantic search
+                    if prompt:
+                        semantic_eps = await semantic_episodes(
+                            query=prompt,
+                            limit=5,
+                            min_confidence=0.7
+                        )
+                        # Merge: temporal (10) + semantic (up to 5)
+                        episodes = episodes + semantic_eps
+                except Exception as e:
+                    # Semantic search failed, continue with temporal only
+                    import sys
+                    print(f"[voice] Semantic retrieval failed: {e}", file=sys.stderr)
+
             if episodes:
                 lines_ctx = [
-                    f"[{ep['ts']}] {ep['actor']}/{ep['tool']}: "
-                    f"{ep.get('input', '')[:200]} -> {ep.get('output', '')[:200]}"
+                    f"[{ep['ts']}] {ep['actor']}/{ep.get('tool', ep.get('kind', 'unknown'))}: "
+                    f"{ep.get('input', ep.get('subject', ''))[:200]} -> {ep.get('output', ep.get('content', ''))[:200]}"
                     for ep in episodes
                 ]
                 ctx = (

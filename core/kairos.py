@@ -368,14 +368,11 @@ _STOPWORDS = {
 }
 
 
-def _embed_stub(text: str, dim: int = 1536) -> list[float]:
+def _embed_stub(text: str, dim: int = 384) -> list[float]:
     """Deterministic, dependency-free 'embedding'.
 
     Hashes overlapping char-trigrams into `dim` buckets, then L2-normalises.
-    Used when no real embedding model is configured; lets autoDream still
-    write rows so the rest of the system has data to operate on. Swap with
-    a real embedder by setting EMBED_PROVIDER or by registering a callable
-    via register_embedder().
+    Used as fallback when real embedding fails.
     """
     import hashlib
     import math
@@ -396,19 +393,15 @@ def _embed_stub(text: str, dim: int = 1536) -> list[float]:
     return buckets
 
 
-_embedder: Optional[Callable[[str], list[float]]] = None
-
-
-def register_embedder(fn: Callable[[str], list[float]]) -> None:
-    """Plug a real embedder in. Must return a list[float] of dim 1536."""
-    global _embedder
-    _embedder = fn
-
-
-def _embed(text: str) -> list[float]:
-    if _embedder is not None:
-        return _embedder(text)
-    return _embed_stub(text)
+async def _embed(text: str) -> list[float]:
+    """Get embedding for text. Uses real embeddings, falls back to stub."""
+    try:
+        from core.embeddings import embed_text
+        return await embed_text(text)
+    except Exception as e:
+        log = _get_logger()
+        log.warning(f"[kairos._embed] Real embedding failed: {e}, using stub")
+        return _embed_stub(text)
 
 
 def extract_patterns(
@@ -523,7 +516,7 @@ async def auto_dream(
                 kind=p["kind"],
                 subject=subject,
                 content=content,
-                embedding=_embed(content),
+                embedding=await _embed(content),
                 confidence=confidence,
                 metadata=p,
             )

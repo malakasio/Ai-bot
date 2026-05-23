@@ -502,12 +502,30 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
         # ── Load last 10 episodes as conversation context ────────────────
         context = ""
         try:
-            from core.memory import recent_episodes
+            from core.memory import recent_episodes, semantic_episodes
             episodes = await recent_episodes(limit=10)
+
+            # Feature flag: add semantic retrieval
+            if os.getenv("JARVIS_ENABLE_SEMANTIC_MEMORY", "false").lower() == "true":
+                try:
+                    # Extract query from user prompt
+                    if prompt:
+                        semantic_eps = await semantic_episodes(
+                            query=prompt,
+                            limit=5,
+                            min_confidence=0.7
+                        )
+                        # Merge: temporal (10) + semantic (up to 5)
+                        episodes = episodes + semantic_eps
+                except Exception as e:
+                    # Semantic search failed, continue with temporal only
+                    import sys
+                    print(f"[main] Semantic retrieval failed: {e}", file=sys.stderr)
+
             if episodes:
                 lines = [
-                    f"[{ep['ts']}] {ep['actor']}/{ep['tool']}: "
-                    f"{ep.get('input', '')} -> {ep.get('output', '')}"
+                    f"[{ep['ts']}] {ep['actor']}/{ep.get('tool', ep.get('kind', 'unknown'))}: "
+                    f"{ep.get('input', ep.get('subject', ''))} -> {ep.get('output', ep.get('content', ''))}"
                     for ep in episodes
                 ]
                 context = (

@@ -24,12 +24,8 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 from uuid import UUID
 
-# Add src/ to path for imports
-_HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_HERE / "src"))
-
-# Use unified database adapter from src/jarvis
-from jarvis.memory import database
+# Use core database adapter
+from core import database
 
 
 # ─── Types ────────────────────────────────────────────────────────────────
@@ -225,6 +221,65 @@ async def semantic_search(
             )
         )
     return out
+
+
+async def semantic_episodes(
+    query: str,
+    limit: int = 10,
+    kind: Optional[str] = None,
+    min_confidence: float = 0.7,
+) -> list[dict]:
+    """
+    Retrieve episodes by semantic similarity to query.
+
+    Converts query text → embedding → semantic search → episode-like dicts.
+    Returns format compatible with recent_episodes() for easy merging.
+
+    Args:
+        query: Natural language query text
+        limit: Maximum number of results
+        kind: Optional filter by semantic memory kind
+        min_confidence: Minimum confidence threshold (0.0-1.0)
+
+    Returns:
+        List of dicts with keys: id, ts, actor, kind, subject, content,
+        confidence, distance, observation_count, metadata
+    """
+    try:
+        from core.embeddings import embed_text
+
+        # Generate query embedding
+        query_embedding = await embed_text(query)
+
+        # Search semantic memory
+        matches = await semantic_search(
+            embedding=query_embedding,
+            limit=limit,
+            kind=kind,
+            min_confidence=min_confidence,
+        )
+
+        # Convert SemanticMatch to episode-like dict format
+        return [
+            {
+                "id": str(m.id),
+                "ts": m.metadata.get("last_observed_at") if m.metadata else None,
+                "actor": "semantic-memory",
+                "kind": m.kind,
+                "subject": m.subject,
+                "content": m.content,
+                "confidence": m.confidence,
+                "distance": m.distance,
+                "observation_count": m.observation_count,
+                "metadata": m.metadata or {},
+            }
+            for m in matches
+        ]
+    except Exception as e:
+        # Fallback: return empty list on error, don't break caller
+        import sys
+        print(f"[semantic_episodes] Error: {e}", file=sys.stderr)
+        return []
 
 
 # ─── 4. Procedural ────────────────────────────────────────────────────────
