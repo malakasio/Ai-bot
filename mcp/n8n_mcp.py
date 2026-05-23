@@ -2,11 +2,11 @@
 
 ARCHITECTURE:
   - Validation/docs tools → upstream czlonkowski/n8n-mcp stdio bridge (7 tools)
-  - Execution tools → local REST client to n8n API (3 tools)
+  - Execution history tools → local REST client to n8n API (2 tools)
 
-RATIONALE:
-  The upstream n8n-mcp package is a documentation/validation tool and does NOT
-  support workflow execution. We use a hybrid approach to provide both capabilities.
+IMPORTANT: n8n public API does NOT support workflow execution.
+  - Use n8n_trigger tool (automation_mcp.py) for webhook-based execution
+  - This module only provides execution history queries (list/get executions)
 
 Env:
   N8N_BASE_URL  — n8n instance URL (default: http://localhost:5678)
@@ -65,7 +65,7 @@ async def _n8n_request(method: str, path: str, *,
                        json_body: Optional[dict[str, Any]] = None,
                        timeout: float = 60.0) -> dict[str, Any]:
     """Call the n8n REST API and return a structured response."""
-    url = f"{_base_url()}{path}"
+    url = f"{_base_url()}/api/v1{path}"
     try:
         import httpx
     except ImportError:
@@ -115,11 +115,12 @@ _UPSTREAM_TOOLS: list[dict[str, Any]] = [
     {"name": "validate_workflow", "desc": "Validate a workflow structure.", "schema": {"type": "object", "properties": {"workflow": {"type": "object"}}, "required": ["workflow"]}},
 ]
 
-# LOCAL REST TOOLS (3): Provided by local REST client
-# These handle workflow execution which upstream doesn't support.
+# LOCAL REST TOOLS (2): Provided by local REST client
+# These query execution history (n8n public API supports read operations only).
+# Note: Workflow execution is NOT supported by n8n public API.
+# Use n8n_trigger tool (automation_mcp.py) for webhook-based execution instead.
 
 _LOCAL_REST_TOOLS: list[dict[str, Any]] = [
-    {"name": "n8n_execute_workflow", "desc": "Execute a workflow manually. Returns execution ID.", "schema": {"type": "object", "properties": {"workflow_id": {"type": "string"}, "data": {"type": "object"}, "timeout_s": {"type": "number", "minimum": 1, "maximum": 300}}, "required": ["workflow_id"]}},
     {"name": "n8n_list_executions", "desc": "List workflow executions. Filter by workflow_id, status, limit.", "schema": {"type": "object", "properties": {"workflow_id": {"type": "string"}, "status": {"type": "string", "enum": ["error", "success", "running", "waiting"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
     {"name": "n8n_get_execution", "desc": "Get a single execution by ID with full node-by-node data.", "schema": {"type": "object", "properties": {"execution_id": {"type": "string"}}, "required": ["execution_id"]}},
 ]
@@ -304,43 +305,6 @@ def _get_client() -> _McpClient:
 # ─── REST tool implementations ───────────────────────────────────────────
 
 
-async def _rest_execute_workflow(args: dict[str, Any]) -> dict[str, Any]:
-    """Execute a workflow via REST API."""
-    err_msg = _check_config()
-    if err_msg:
-        return err(err_msg, code="missing_config")
-
-    wf_id = require_str(args["workflow_id"], "workflow_id", max_len=64,
-                        pattern=r"[A-Za-z0-9]+")
-    data = args.get("data", None)
-    if data is not None and not isinstance(data, dict):
-        return err("data must be an object", code="invalid_input")
-
-    timeout = float(args.get("timeout_s", 120))
-    body = {"workflowData": {"id": wf_id}}
-    if data:
-        body["data"] = data
-
-    resp = await _n8n_request("POST", f"/rest/workflows/{wf_id}/run",
-                              json_body=body, timeout=timeout + 5)
-    if "_error" in resp:
-        return err(f"n8n request failed: {resp['_error']}", code="http_error")
-    if not resp["ok"]:
-        return err(f"n8n returned HTTP {resp['status']}", code="http_status",
-                   detail=resp["data"])
-
-    result = resp["data"]
-    exec_id = None
-    if isinstance(result, dict):
-        exec_id = result.get("executionId") or result.get("id")
-
-    return ok({
-        "workflow_id": wf_id,
-        "execution_id": exec_id,
-        "detail": result,
-    })
-
-
 async def _rest_list_executions(args: dict[str, Any]) -> dict[str, Any]:
     """List executions via REST API."""
     err_msg = _check_config()
@@ -367,7 +331,7 @@ async def _rest_list_executions(args: dict[str, Any]) -> dict[str, Any]:
         params.append(f"status={status}")
     qs = "?" + "&".join(params) if params else ""
 
-    resp = await _n8n_request("GET", f"/rest/executions{qs}")
+    resp = await _n8n_request("GET", f"/executions{qs}")
     if "_error" in resp:
         return err(f"n8n request failed: {resp['_error']}", code="http_error")
     if not resp["ok"]:
@@ -391,7 +355,7 @@ async def _rest_get_execution(args: dict[str, Any]) -> dict[str, Any]:
     exec_id = require_str(args["execution_id"], "execution_id", max_len=64,
                           pattern=r"[0-9]+")
 
-    resp = await _n8n_request("GET", f"/rest/executions/{exec_id}")
+    resp = await _n8n_request("GET", f"/executions/{exec_id}")
     if "_error" in resp:
         return err(f"n8n request failed: {resp['_error']}", code="http_error")
     if not resp["ok"]:
@@ -405,10 +369,8 @@ async def _rest_get_execution(args: dict[str, Any]) -> dict[str, Any]:
 
 def _make_handler(tool_name: str):
     """Return an async handler that routes to either REST or stdio bridge."""
-    # Route execution tools to local REST client
-    if tool_name == "n8n_execute_workflow":
-        return _rest_execute_workflow
-    elif tool_name == "n8n_list_executions":
+    # Route execution history tools to local REST client
+    if tool_name == "n8n_list_executions":
         return _rest_list_executions
     elif tool_name == "n8n_get_execution":
         return _rest_get_execution
@@ -474,10 +436,8 @@ async def call_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     """
     _register()  # Ensure tools are registered
 
-    # Route execution tools to REST handlers
-    if tool_name == "n8n_execute_workflow":
-        return await _rest_execute_workflow(args)
-    elif tool_name == "n8n_list_executions":
+    # Route execution history tools to REST handlers
+    if tool_name == "n8n_list_executions":
         return await _rest_list_executions(args)
     elif tool_name == "n8n_get_execution":
         return await _rest_get_execution(args)
