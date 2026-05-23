@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import sys
 import time
 from dataclasses import dataclass
@@ -481,9 +482,23 @@ class GodModeOrchestrator:
             print(f"[godmode]   Step {step_idx + 1}/{len(steps)}: {step_desc}")
             print(f"[godmode]   Command: {command}")
 
-            # Execute command in worktree
-            proc = await asyncio.create_subprocess_shell(
-                command,
+            # Validate command
+            allowed_commands = ["git", "npm", "python", "python3", "pytest", "ruff", "mypy", "pip", "poetry"]
+            try:
+                args = shlex.split(command)
+            except ValueError as e:
+                print(f"[godmode]   Step failed: Invalid command syntax: {e}")
+                return False
+
+            first_word = args[0] if args else ""
+
+            if first_word not in allowed_commands:
+                print(f"[godmode]   Step failed: Command not allowed: {first_word}")
+                return False
+
+            # Execute command in worktree using argument array (safe)
+            proc = await asyncio.create_subprocess_exec(
+                *args,
                 cwd=worktree.path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

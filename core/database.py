@@ -165,6 +165,13 @@ class _TransactionCtx:
                 await self._txn.commit()
             else:
                 await self._txn.rollback()
+        except Exception as e:
+            # Ensure transaction is closed even on error
+            try:
+                await self._txn.rollback()
+            except:
+                pass
+            raise e
         finally:
             if self._conn is not None and self._pool is not None:
                 await self._pool.release(self._conn)
