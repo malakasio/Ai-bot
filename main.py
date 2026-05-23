@@ -42,6 +42,7 @@ Endpoints
   GET  /healthz              — liveness (zero-dependency, always 200)
   GET  /health               — alias for PaaS conventions
   GET  /readyz               — readiness (db reachable + daemons ready)
+  GET  /metrics              — Prometheus metrics (LLM tokens, costs, latency)
   GET  /                     — operator landing page
   POST /agent/run            — run one agent turn  {"prompt": "..."}
   GET  /mcp/tools            — list MCP tools
@@ -407,6 +408,15 @@ def create_app() -> Any:
         # The lightest probe possible — pure string, no JSON, no STATE access.
         # Useful as a fallback healthcheck path.
         return "pong"
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    def metrics() -> str:
+        """Prometheus metrics endpoint."""
+        try:
+            from core.metrics import get_metrics
+            return get_metrics().export_prometheus()
+        except Exception as e:
+            return f"# Error exporting metrics: {e!r}\n"
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:

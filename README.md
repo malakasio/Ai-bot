@@ -16,26 +16,21 @@ a map.
 
 ## Architecture
 
-```
-                ┌──────────────────────────────────────────────┐
-                │                 Operator                     │
-                │     (voice · telegram · http · dashboard)    │
-                └────────────────────┬─────────────────────────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │       core/         │   ← orchestrator, router,
-                          │  identity & policy  │     zone validator, audit
-                          └─┬────────┬────────┬─┘
-                            │        │        │
-                  ┌─────────▼─┐  ┌───▼───┐  ┌─▼─────────┐
-                  │   mcp/    │  │skills/│  │ memory/   │
-                  │  servers  │  │ how-to│  │ pg+vector │
-                  └───────────┘  └───────┘  └───────────┘
-                            │
-                  ┌─────────▼──────────┐
-                  │     scripts/       │   ← bash-only filesystem ops
-                  └────────────────────┘
-```
+Flat structure inside `core/`:
+
+**Core modules:**
+- `core/agent.py` — Main agent loop with Anthropic client, circuit breaker, MCP routing, metrics collection
+- `core/kairos.py` — Background daemon (task queue, GitHub polling, autoDream)
+- `core/sentinel.py` — Security daemon (red-zone monitoring, SSH brute-force detection)
+- `core/telegram_bot.py` — Telegram integration with screenshot support
+- `core/memory.py` — Episodic/semantic memory API over PostgreSQL
+- `core/database.py` — PostgreSQL connection pool (asyncpg)
+
+**New in v7.0 (2026-05-23):**
+- `core/embeddings.py` — Multi-provider embeddings (sentence-transformers, Ollama, OpenAI, Jina AI) for semantic search with pgvector
+- `core/metrics.py` — Prometheus-compatible observability (LLM tokens, costs, latency, voice metrics, circuit breaker trips)
+- `core/llm_router.py` — Task-aware model selection with 12 task types, routing across Anthropic (Claude Haiku/Sonnet/Opus), Groq (free cloud), and Ollama (local)
+- `core/orchestrator.py` — Hierarchical sub-agent coordination with quality scoring (rejects outputs < 70/100: "do not rubber-stamp weak work")
 
 ### How it's wired
 
@@ -62,7 +57,7 @@ in-process supervisor is the inner one.
 
 | Path | Purpose |
 |------|---------|
-| `core/` | Orchestrator, model router, zone validator, audit logger, snapshot manager. The trust-critical code. |
+| `core/` | Agent loop, orchestrator, model router, zone validator, audit logger, snapshot manager, metrics, embeddings. The trust-critical code. |
 | `mcp/` | Model Context Protocol servers and clients. Tool surface for the LLM. |
 | `skills/` | One subdirectory per skill, each with a `SKILL.md` (procedural memory). |
 | `config/` | Static configuration (zones, model routing, MCP wiring). Not secrets. |
@@ -70,6 +65,21 @@ in-process supervisor is the inner one.
 | `tests/` | Unit and integration tests, including protocol-compliance tests. |
 | `CLAUDE.md` | Behavioral contract. The DNA. |
 | `.env.example` | Environment variables — copy to `.env` and fill in. |
+
+---
+
+## Features
+
+### Core Capabilities
+- **Multi-agent orchestration** — Hierarchical sub-agent coordination with quality scoring (correctness, completeness, efficiency, safety). Rejects outputs < 70/100.
+- **Semantic memory** — pgvector embeddings with multi-provider support (sentence-transformers local, Ollama, OpenAI, Jina AI free tier)
+- **Task-aware LLM routing** — 12 task types (simple_qa, voice, code_review, architecture, etc.) automatically routed to optimal model tier
+- **Real-time observability** — Prometheus metrics export at `/metrics` (LLM tokens, costs, latency, voice pipeline, circuit breaker)
+- **Voice pipeline** — WebSocket-based with <500ms latency target (Deepgram STT → Claude → ElevenLabs TTS)
+- **Browser automation** — Playwright with stealth mode, screenshot capture, networkidle wait strategy
+- **Security zones** — Green/yellow/red/black path classification with pre-execution validation
+- **Circuit breaker** — Auto-recovery from API failures with exponential backoff
+- **Snapshot-before-mutate** — Git-based rollback points for all destructive operations
 
 ---
 
@@ -169,6 +179,7 @@ Once running on `http://<host>:8000`:
 | `/`                      | Operator landing page                              |
 | `/healthz`               | Liveness + per-daemon status                       |
 | `/readyz`                | Readiness — fails if DB or any daemon is down      |
+| `/metrics`               | Prometheus metrics (LLM tokens, costs, latency)    |
 | `/agent/run` (POST)      | One agent turn — `{"prompt": "..."}`               |
 | `/mcp/tools`             | List MCP tools                                     |
 | `/mcp/call` (POST)       | Dispatch an MCP tool — `{"tool":"...","args":{}}`  |
@@ -206,12 +217,18 @@ procedural. See `core/dream.py`.
 
 ## Model
 
-JARVIS v7.0 uses **Claude Haiku** (`claude-haiku-4-5`) for every model call —
-the agent loop in `core/agent.py` and the voice pipeline in `voice/pipeline.py`.
-Haiku is chosen for its sub-500 ms TTFT, which the voice channel requires.
+JARVIS v7.0 uses **task-aware routing** via `core/llm_router.py`:
 
-Override the model with the `JARVIS_AGENT_MODEL` env var (agent loop) or
-`ANTHROPIC_MODEL` (CLI helpers). All model calls go to Anthropic.
+- **Simple tasks** (voice, notifications, simple Q&A) → Claude Haiku 4.5 (fast, cheap)
+- **Code & analysis** (code review, generation, analysis) → Claude Sonnet 4.6 (balanced)
+- **Complex tasks** (architecture, deep debug, critical) → Claude Opus 4.7 (maximum capability)
+
+**Multi-provider support:**
+- **Anthropic** (Claude) — primary, if `ANTHROPIC_API_KEY` set
+- **Groq** (free cloud) — fallback, if `GROQ_API_KEY` set
+- **Ollama** (local) — final fallback, always available
+
+Override with `JARVIS_AGENT_MODEL` env var to force a specific model. The voice pipeline defaults to Haiku for its sub-500ms TTFT requirement.
 
 ---
 
