@@ -551,9 +551,7 @@ DESTRUCTIVE_TOOLS: set[str] = {
     # n8n / apify — fire side-effects
     "n8n_trigger", "automation.n8n_trigger",
     "apify_run_actor", "automation.apify_run_actor",
-    # computer-use — browser mutations
-    "browser_navigate", "computer-use.browser_navigate",
-    "browser_click", "computer-use.browser_click",
+    # computer-use — only form submission is destructive
     "browser_type", "computer-use.browser_type",
 }
 
