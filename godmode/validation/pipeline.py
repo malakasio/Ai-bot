@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -247,7 +248,7 @@ class ValidationPipeline:
             cwd=self.worktree_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**asyncio.subprocess.os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
         )
         stdout, stderr = await proc.communicate()
 

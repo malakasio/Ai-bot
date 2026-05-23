@@ -157,7 +157,17 @@ class GodModeOrchestrator:
         """
         task_id = task["id"]
         title = task["title"]
-        plan = task["plan"] or {}
+
+        # Parse plan if it's a JSON string
+        plan = task["plan"]
+        if isinstance(plan, str):
+            try:
+                plan = json.loads(plan)
+            except (json.JSONDecodeError, TypeError):
+                plan = {}
+        elif plan is None:
+            plan = {}
+
         agent_id = f"godmode-agent-{task_id}"
 
         print(f"[godmode] Executing task {task_id}: {title}")
