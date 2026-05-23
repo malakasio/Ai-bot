@@ -210,6 +210,10 @@ async def browser_navigate(args: dict[str, Any]) -> dict[str, Any]:
         if response is None:
             return err("navigation failed (no response)", code="navigation_failed")
 
+        # Additional wait for dynamic content (JS frameworks, lazy-loaded images)
+        # This ensures screenshots capture fully rendered pages
+        await asyncio.sleep(2.0)
+
         return ok({
             "url": page.url,
             "status": response.status,
