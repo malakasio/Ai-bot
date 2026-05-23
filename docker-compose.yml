@@ -150,11 +150,15 @@ services:
   xvfb:
     image: ubuntu:22.04
     container_name: jarvis-xvfb
-    command: >
-      bash -c "apt-get update -qq &&
-               apt-get install -y -qq xvfb x11vnc &&
-               Xvfb :99 -screen 0 1280x720x24 &
-               x11vnc -display :99 -localhost -nopw -forever"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb x11vnc
+        Xvfb :99 -screen 0 1280x720x24 -ac +extension GLX +render -noreset &
+        sleep 3
+        exec x11vnc -display :99 -localhost -nopw -forever
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     environment:

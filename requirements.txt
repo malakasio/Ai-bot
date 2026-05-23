@@ -63,5 +63,9 @@ websockets==16.0
 pytest==8.3.4
 pytest-asyncio==0.25.0
 
+# ─── Browser automation (computer-use) ───────────────────────────────────────
+playwright==1.48.0
+playwright-stealth==1.0.6
+
 # ─── Dev tools ────────────────────────────────────────────────────────────────
 python-dotenv==1.0.1

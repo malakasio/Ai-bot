@@ -107,6 +107,26 @@
         "version": "2.55.0",
         "bin": "n8n-mcp"
       }
+    },
+    {
+      "name": "computer-use",
+      "enabled": true,
+      "module": "mcp.computer_use_mcp",
+      "description": "Browser automation via Playwright: navigate, click, type, screenshot. Requires jarvis-xvfb Docker container.",
+      "env_passthrough": [
+        "JARVIS_NET_ALLOWLIST",
+        "JARVIS_NET_ALLOW_PRIVATE",
+        "DISPLAY"
+      ],
+      "tools": [
+        "browser_navigate",
+        "browser_click",
+        "browser_type",
+        "browser_screenshot"
+      ],
+      "requires_docker": [
+        "jarvis-xvfb"
+      ]
     }
   ]
 }
