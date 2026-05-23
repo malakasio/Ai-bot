@@ -115,8 +115,8 @@ _UPSTREAM_TOOLS: list[dict[str, Any]] = [
     {"name": "validate_workflow", "desc": "Validate a workflow structure.", "schema": {"type": "object", "properties": {"workflow": {"type": "object"}}, "required": ["workflow"]}},
 ]
 
-# LOCAL REST TOOLS (3): Provided by local REST client
-# These query execution history and workflows (n8n public API supports read operations only).
+# LOCAL REST TOOLS (4): Provided by local REST client
+# These query execution history, workflows, and create workflows (n8n public API supports read operations only).
 # Note: Workflow execution is NOT supported by n8n public API.
 # Use n8n_trigger tool (automation_mcp.py) for webhook-based execution instead.
 
@@ -124,6 +124,7 @@ _LOCAL_REST_TOOLS: list[dict[str, Any]] = [
     {"name": "n8n_list_executions", "desc": "List workflow executions. Filter by workflow_id, status, limit.", "schema": {"type": "object", "properties": {"workflow_id": {"type": "string"}, "status": {"type": "string", "enum": ["error", "success", "running", "waiting"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
     {"name": "n8n_get_execution", "desc": "Get a single execution by ID with full node-by-node data.", "schema": {"type": "object", "properties": {"execution_id": {"type": "string"}}, "required": ["execution_id"]}},
     {"name": "n8n_list_workflows", "desc": "List all workflows with optional filters (active, tags, name search).", "schema": {"type": "object", "properties": {"active": {"type": "boolean", "description": "Filter by active status"}, "tags": {"type": "string", "description": "Comma-separated tag names"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Max workflows to return (default: 100)"}}}},
+    {"name": "n8n_create_workflow", "desc": "Create a new n8n workflow. Returns workflow ID and metadata. Note: Workflow will be created as inactive - activate manually in n8n UI.", "schema": {"type": "object", "properties": {"name": {"type": "string", "description": "Workflow name"}, "nodes": {"type": "array", "description": "Array of workflow nodes"}, "connections": {"type": "object", "description": "Node connections object"}, "settings": {"type": "object", "description": "Workflow settings (optional)"}}, "required": ["name", "nodes", "connections"]}},
 ]
 
 # ─── Lazy subprocess client ──────────────────────────────────────────────
@@ -410,6 +411,51 @@ async def _rest_list_workflows(args: dict[str, Any]) -> dict[str, Any]:
     })
 
 
+async def _rest_create_workflow(args: dict[str, Any]) -> dict[str, Any]:
+    """Create workflow via REST API."""
+    err_msg = _check_config()
+    if err_msg:
+        return err(err_msg, code="missing_config")
+
+    # Validate required fields
+    name = require_str(args["name"], "name", max_len=128)
+    nodes = args.get("nodes", [])
+    connections = args.get("connections", {})
+    settings = args.get("settings", {})
+
+    if not isinstance(nodes, list) or len(nodes) == 0:
+        return err("nodes must be a non-empty array", code="invalid_input")
+    if not isinstance(connections, dict):
+        return err("connections must be an object", code="invalid_input")
+    if not isinstance(settings, dict):
+        return err("settings must be an object", code="invalid_input")
+
+    # Build workflow payload
+    payload = {
+        "name": name,
+        "nodes": nodes,
+        "connections": connections,
+        "settings": settings
+    }
+
+    resp = await _n8n_request("POST", "/workflows", json_body=payload)
+    if "_error" in resp:
+        return err(f"n8n request failed: {resp['_error']}", code="http_error")
+    if not resp["ok"]:
+        return err(f"n8n returned HTTP {resp['status']}", code="http_status",
+                   detail=resp["data"])
+
+    data = resp["data"]
+    return ok({
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "active": data.get("active", False),
+        "created": data.get("createdAt"),
+        "url": f"{_base_url()}/workflow/{data.get('id')}",
+        "note": "Workflow created as inactive. Activate manually in n8n UI or via n8n internal API."
+    })
+
+
 # ─── Tool handler factory ────────────────────────────────────────────────
 
 def _make_handler(tool_name: str):
@@ -421,6 +467,8 @@ def _make_handler(tool_name: str):
         return _rest_get_execution
     elif tool_name == "n8n_list_workflows":
         return _rest_list_workflows
+    elif tool_name == "n8n_create_workflow":
+        return _rest_create_workflow
 
     # Route all other tools to upstream stdio bridge
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
@@ -490,7 +538,8 @@ async def call_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         return await _rest_get_execution(args)
     elif tool_name == "n8n_list_workflows":
         return await _rest_list_workflows(args)
-        return await _rest_get_execution(args)
+    elif tool_name == "n8n_create_workflow":
+        return await _rest_create_workflow(args)
 
     # Route all other tools to stdio bridge
     client = _get_client()
