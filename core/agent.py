@@ -549,11 +549,8 @@ DESTRUCTIVE_TOOLS: set[str] = {
     "exec", "shell.exec",
     # git MCP — only mutating ops
     "commit", "git.commit", "stage", "git.stage",
-    # n8n / apify — fire side-effects
-    "n8n_trigger", "automation.n8n_trigger",
-    "apify_run_actor", "automation.apify_run_actor",
-    # computer-use — only form submission is destructive
-    "browser_type", "computer-use.browser_type",
+    # P3 protocol scope: local filesystem mutation only.
+    # External side-effects (n8n, apify, browser) do NOT require snapshots.
 }
 
 
