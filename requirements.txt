@@ -51,6 +51,10 @@ json-repair==0.30.3
 # ─── File locking (parallel agents) ──────────────────────────────────────────
 filelock==3.16.1
 
+# ─── Database (PostgreSQL with pgvector) ──────────────────────────────────────
+asyncpg==0.30.0
+pgvector==0.3.6
+
 # ─── OPTIONAL PAID APIs ───────────────────────────────────────────────────────
 # anthropic==0.40.0        # Claude API (set ANTHROPIC_API_KEY)
 deepgram-sdk==3.9.0
