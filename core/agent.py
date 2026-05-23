@@ -244,6 +244,12 @@ def build_async_client() -> Any:
     default https://api.anthropic.com. The SDK reads this env var itself,
     but we pass it explicitly so the behavior is obvious from the trace.
 
+    **Proxy authentication:** When ANTHROPIC_BASE_URL is set, the client
+    sends `Authorization: Bearer <key>` instead of the SDK's default
+    `x-api-key: <key>` header. This matches the OAuth2 Bearer token format
+    expected by most API gateways (e.g. neutralbeats). Direct Anthropic API
+    calls (no base_url) continue using the standard x-api-key header.
+
     Timeout defaults to 300s (5 minutes) to prevent indefinite hangs when
     proxies return empty responses. Override via JARVIS_API_TIMEOUT.
     """
@@ -256,14 +262,55 @@ def build_async_client() -> Any:
     api_key = _load_api_key()
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
     timeout = float(os.environ.get("JARVIS_API_TIMEOUT", "300.0"))
-    kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout}
+
     if base_url:
-        kwargs["base_url"] = base_url
+        # Proxy mode: use Authorization: Bearer header instead of x-api-key.
+        # The SDK appends /v1 to base_url, so strip it if present to avoid /v1/v1.
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+
+        # Use Omit() to explicitly tell the SDK not to add X-Api-Key header.
+        # This prevents header conflicts when the proxy expects only Bearer auth.
         try:
-            get_logger().info("anthropic.client.base_url",
-                              extra={"base_url": base_url, "timeout": timeout})
+            from anthropic._types import NOT_GIVEN, Omit
+            import httpx
+
+            http_client = httpx.AsyncClient(timeout=timeout)
+            kwargs: dict[str, Any] = {
+                "api_key": NOT_GIVEN,
+                "base_url": base_url,
+                "http_client": http_client,
+                "default_headers": {
+                    "Authorization": f"Bearer {api_key}",
+                    "X-Api-Key": Omit()
+                }
+            }
+        except ImportError:
+            # Fallback if SDK version doesn't support Omit
+            import httpx
+            http_client = httpx.AsyncClient(
+                timeout=timeout,
+                headers={"Authorization": f"Bearer {api_key}"}
+            )
+            kwargs: dict[str, Any] = {
+                "api_key": "unused",
+                "base_url": base_url,
+                "http_client": http_client
+            }
+
+        try:
+            get_logger().info("anthropic.client.proxy_mode",
+                              extra={
+                                  "base_url": base_url,
+                                  "timeout": timeout,
+                                  "auth_header": "Bearer"
+                              })
         except Exception:
             pass
+    else:
+        # Direct mode: use standard x-api-key authentication
+        kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout}
+
     return AsyncAnthropic(**kwargs)
 
 
