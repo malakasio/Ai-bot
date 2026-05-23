@@ -192,7 +192,9 @@ class TestMilestone1Voice:
     async def test_tts_produces_audio(self):
         """TTS should return non-empty bytes (skipped if network unavailable)."""
         try:
-            import edge_tts  # free
+            import importlib.util
+            if importlib.util.find_spec("edge_tts") is None:
+                pytest.skip("edge-tts not installed")
             from jarvis.voice.tts import synthesize_full
             audio = await synthesize_full("Γεια σου, εγώ είμαι ο JARVIS.")
             if len(audio) == 0:
@@ -217,7 +219,9 @@ class TestMilestone2Memory:
     async def test_embed_returns_correct_dimension(self):
         """Embedding model must return consistent dimensions."""
         try:
-            from sentence_transformers import SentenceTransformer
+            import importlib.util
+            if importlib.util.find_spec("sentence_transformers") is None:
+                pytest.skip("sentence-transformers not installed")
             from jarvis.memory.embeddings import embed_text
             vec = await embed_text("test")
             assert len(vec) > 0

@@ -6,5 +6,8 @@
   "fastModel": "qwen/qwen3-coder-next",
   "enableExperimentalFeatures": false,
   "disablePromptCaching": false,
-  "bash_timeout": 120000
+  "bash_timeout": 120000,
+  "enabledPlugins": {
+    "ralph-loop@claude-plugins-official": true
+  }
 }
