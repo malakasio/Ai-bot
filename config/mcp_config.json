@@ -77,35 +77,28 @@
       "name": "n8n",
       "enabled": true,
       "module": "mcp.n8n_mcp",
-      "description": "n8n workflow automation via czlonkowski/n8n-mcp stdio bridge. Full CRUD, execution, credential, tag, variable, data-table management, AI workflow generation, and security audit.",
+      "description": "n8n workflow automation via hybrid architecture: upstream czlonkowski/n8n-mcp stdio bridge (7 validation/docs tools) + local REST client (3 execution tools). Execution tools require N8N_API_KEY.",
       "env_passthrough": [
         "N8N_BASE_URL",
         "N8N_API_KEY"
       ],
       "tools": [
-        "n8n_list_workflows",
-        "n8n_get_workflow",
-        "n8n_create_workflow",
-        "n8n_update_full_workflow",
-        "n8n_update_partial_workflow",
-        "n8n_delete_workflow",
-        "n8n_activate_workflow",
-        "n8n_deactivate_workflow",
+        "tools_documentation",
+        "search_nodes",
+        "get_node",
+        "validate_node",
+        "get_template",
+        "search_templates",
+        "validate_workflow",
         "n8n_execute_workflow",
         "n8n_list_executions",
-        "n8n_get_execution",
-        "n8n_delete_execution",
-        "n8n_manage_tags",
-        "n8n_manage_variables",
-        "n8n_manage_credentials",
-        "n8n_manage_data_tables",
-        "n8n_generate_workflow",
-        "n8n_audit_instance"
+        "n8n_get_execution"
       ],
       "known_upstream": {
         "package": "czlonkowski/n8n-mcp",
         "version": "2.55.0",
-        "bin": "n8n-mcp"
+        "bin": "n8n-mcp",
+        "note": "Upstream provides 7 validation/docs tools only. Execution tools use local REST client."
       }
     },
     {

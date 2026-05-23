@@ -1,8 +1,12 @@
-"""MCP server: n8n — stdio bridge to the real czlonkowski/n8n-mcp Node.js process.
+"""MCP server: n8n — hybrid architecture combining stdio bridge + REST client.
 
-Replaces the pre-network local stand-in (commit d3f2787) with a genuine
-MCP JSON-RPC bridge. Spawns ``n8n-mcp`` as a subprocess, proxies every
-tool call through the real upstream binary.
+ARCHITECTURE:
+  - Validation/docs tools → upstream czlonkowski/n8n-mcp stdio bridge (7 tools)
+  - Execution tools → local REST client to n8n API (3 tools)
+
+RATIONALE:
+  The upstream n8n-mcp package is a documentation/validation tool and does NOT
+  support workflow execution. We use a hybrid approach to provide both capabilities.
 
 Env:
   N8N_BASE_URL  — n8n instance URL (default: http://localhost:5678)
@@ -15,12 +19,13 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import time
 from typing import Any, Optional
 
-from ._common import Server, Tool, err, ok, require_dict
+from ._common import Server, Tool, err, ok, require_dict, require_str, safe_truncate
 
 log = logging.getLogger("jarvis.mcp.n8n")
 
@@ -33,31 +38,90 @@ MAX_RESTARTS = int(os.environ.get("MCP_MAX_RESTARTS", "2"))
 
 server = Server(name="n8n")
 
+# ─── REST client helpers (for execution tools) ───────────────────────────
 
-# ─── Known tool stubs (from real n8n-mcp v2.55) ──────────────────────────
+
+def _base_url() -> str:
+    return (os.environ.get("N8N_BASE_URL", "").strip().rstrip("/")
+            or "http://localhost:5678")
+
+
+def _api_key() -> str:
+    return os.environ.get("N8N_API_KEY", "").strip()
+
+
+def _headers() -> dict[str, str]:
+    h = {
+        "User-Agent": "jarvis-mcp/7.0",
+        "Content-Type": "application/json",
+    }
+    key = _api_key()
+    if key:
+        h["X-N8N-API-KEY"] = key
+    return h
+
+
+async def _n8n_request(method: str, path: str, *,
+                       json_body: Optional[dict[str, Any]] = None,
+                       timeout: float = 60.0) -> dict[str, Any]:
+    """Call the n8n REST API and return a structured response."""
+    url = f"{_base_url()}/api/v1{path}"
+    try:
+        import httpx
+    except ImportError:
+        return {"_error": "httpx not installed; pip install httpx"}
+    try:
+        async with httpx.AsyncClient(timeout=timeout,
+                                     follow_redirects=True) as c:
+            resp = await c.request(method, url,
+                                   headers=_headers(),
+                                   json=json_body)
+        body = resp.text
+        try:
+            data = json.loads(body)
+        except Exception:
+            data = {"raw": safe_truncate(body, 32 * 1024)}
+        return {
+            "ok": 200 <= resp.status_code < 300,
+            "status": resp.status_code,
+            "headers": dict(resp.headers),
+            "data": data,
+            "body_bytes": len(resp.content),
+            "url": str(resp.url),
+        }
+    except Exception as e:
+        return {"_error": repr(e)}
+
+
+def _check_config() -> Optional[str]:
+    """Return error message if config is missing, else None."""
+    if not _api_key():
+        return "N8N_API_KEY not set"
+    return None
+
+
+# ─── Tool definitions ────────────────────────────────────────────────────
 #
-# Hardcoded so get_server() returns instantly; the subprocess starts lazily
-# on the first tool call inside the app's event loop.
+# UPSTREAM TOOLS (7): Provided by czlonkowski/n8n-mcp stdio bridge
+# These are documentation/validation tools only.
 
-_N8N_MCP_TOOLS: list[dict[str, Any]] = [
-    {"name": "n8n_list_workflows", "desc": "List workflows, optionally filtered by project/status/tags.", "schema": {"type": "object", "properties": {"projectId": {"type": "string"}, "active": {"type": "boolean"}, "tags": {"type": "array", "items": {"type": "string"}}, "limit": {"type": "integer"}}}},
-    {"name": "n8n_get_workflow", "desc": "Get workflow by ID. Modes: full, details, structure, minimal, active.", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "mode": {"type": "string", "enum": ["full", "details", "structure", "minimal", "active"]}}, "required": ["id"]}},
-    {"name": "n8n_create_workflow", "desc": "Create workflow. Requires name, nodes[], connections{}. Created inactive.", "schema": {"type": "object", "properties": {"name": {"type": "string"}, "nodes": {"type": "array"}, "connections": {"type": "object"}, "settings": {"type": "object"}}, "required": ["name", "nodes", "connections"]}},
-    {"name": "n8n_update_full_workflow", "desc": "Full workflow update. Requires complete nodes[] and connections{}.", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "nodes": {"type": "array"}, "connections": {"type": "object"}}, "required": ["id", "nodes", "connections"]}},
-    {"name": "n8n_update_partial_workflow", "desc": "Partial update: add/remove/update nodes without full replacement.", "schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
-    {"name": "n8n_delete_workflow", "desc": "Permanently delete a workflow by ID.", "schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
-    {"name": "n8n_activate_workflow", "desc": "Activate (publish) a workflow so it runs on its trigger.", "schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
-    {"name": "n8n_deactivate_workflow", "desc": "Deactivate (unpublish) a workflow.", "schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
-    {"name": "n8n_execute_workflow", "desc": "Execute a workflow manually. Returns execution ID.", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "data": {"type": "object"}}, "required": ["id"]}},
-    {"name": "n8n_list_executions", "desc": "List workflow executions. Filter by workflowId, status, limit.", "schema": {"type": "object", "properties": {"workflowId": {"type": "string"}, "status": {"type": "string", "enum": ["error", "success", "running", "waiting"]}, "limit": {"type": "integer"}}}},
-    {"name": "n8n_get_execution", "desc": "Get a single execution by ID with full node-by-node data.", "schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
-    {"name": "n8n_delete_execution", "desc": "Delete an execution record by ID.", "schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
-    {"name": "n8n_manage_tags", "desc": "Manage n8n tags. Actions: list, create, update, delete.", "schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "create", "update", "delete"]}}, "required": ["action"]}},
-    {"name": "n8n_manage_variables", "desc": "Manage n8n variables. Actions: list, create, update, delete.", "schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "create", "update", "delete"]}}, "required": ["action"]}},
-    {"name": "n8n_manage_credentials", "desc": "Manage n8n credentials. Actions: list, get, create, update, delete, getSchema.", "schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "get", "create", "update", "delete", "getSchema"]}}, "required": ["action"]}},
-    {"name": "n8n_manage_data_tables", "desc": "Manage n8n data tables (listRows, createTable, etc).", "schema": {"type": "object", "properties": {"action": {"type": "string"}}, "required": ["action"]}},
-    {"name": "n8n_generate_workflow", "desc": "Generate an n8n workflow from a natural language description using AI.", "schema": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}},
-    {"name": "n8n_audit_instance", "desc": "Security audit of n8n instance (credentials, DB, nodes, filesystem, webhook risks).", "schema": {"type": "object", "properties": {}}},
+_UPSTREAM_TOOLS: list[dict[str, Any]] = [
+    {"name": "tools_documentation", "desc": "Get documentation for all available n8n-mcp tools.", "schema": {"type": "object", "properties": {}}},
+    {"name": "search_nodes", "desc": "Search n8n node documentation by keyword.", "schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "get_node", "desc": "Get detailed documentation for a specific n8n node.", "schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+    {"name": "validate_node", "desc": "Validate a node configuration against its schema.", "schema": {"type": "object", "properties": {"node": {"type": "object"}}, "required": ["node"]}},
+    {"name": "get_template", "desc": "Get an n8n workflow template by ID.", "schema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
+    {"name": "search_templates", "desc": "Search n8n workflow templates.", "schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "validate_workflow", "desc": "Validate a workflow structure.", "schema": {"type": "object", "properties": {"workflow": {"type": "object"}}, "required": ["workflow"]}},
+]
+
+# LOCAL REST TOOLS (3): Provided by local REST client
+# These handle workflow execution which upstream doesn't support.
+
+_LOCAL_REST_TOOLS: list[dict[str, Any]] = [
+    {"name": "n8n_execute_workflow", "desc": "Execute a workflow manually. Returns execution ID.", "schema": {"type": "object", "properties": {"workflow_id": {"type": "string"}, "data": {"type": "object"}, "timeout_s": {"type": "number", "minimum": 1, "maximum": 300}}, "required": ["workflow_id"]}},
+    {"name": "n8n_list_executions", "desc": "List workflow executions. Filter by workflow_id, status, limit.", "schema": {"type": "object", "properties": {"workflow_id": {"type": "string"}, "status": {"type": "string", "enum": ["error", "success", "running", "waiting"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
+    {"name": "n8n_get_execution", "desc": "Get a single execution by ID with full node-by-node data.", "schema": {"type": "object", "properties": {"execution_id": {"type": "string"}}, "required": ["execution_id"]}},
 ]
 
 # ─── Lazy subprocess client ──────────────────────────────────────────────
@@ -237,10 +301,119 @@ def _get_client() -> _McpClient:
     return _client
 
 
+# ─── REST tool implementations ───────────────────────────────────────────
+
+
+async def _rest_execute_workflow(args: dict[str, Any]) -> dict[str, Any]:
+    """Execute a workflow via REST API."""
+    err_msg = _check_config()
+    if err_msg:
+        return err(err_msg, code="missing_config")
+
+    wf_id = require_str(args["workflow_id"], "workflow_id", max_len=64,
+                        pattern=r"[A-Za-z0-9]+")
+    data = args.get("data", None)
+    if data is not None and not isinstance(data, dict):
+        return err("data must be an object", code="invalid_input")
+
+    timeout = float(args.get("timeout_s", 120))
+    body = {"workflowData": {"id": wf_id}}
+    if data:
+        body["data"] = data
+
+    resp = await _n8n_request("POST", f"/workflows/{wf_id}/execute",
+                              json_body=body, timeout=timeout + 5)
+    if "_error" in resp:
+        return err(f"n8n request failed: {resp['_error']}", code="http_error")
+    if not resp["ok"]:
+        return err(f"n8n returned HTTP {resp['status']}", code="http_status",
+                   detail=resp["data"])
+
+    result = resp["data"]
+    exec_id = None
+    if isinstance(result, dict):
+        exec_id = result.get("executionId") or result.get("id")
+
+    return ok({
+        "workflow_id": wf_id,
+        "execution_id": exec_id,
+        "detail": result,
+    })
+
+
+async def _rest_list_executions(args: dict[str, Any]) -> dict[str, Any]:
+    """List executions via REST API."""
+    err_msg = _check_config()
+    if err_msg:
+        return err(err_msg, code="missing_config")
+
+    limit = args.get("limit", 100)
+    if limit is not None:
+        limit = int(limit)
+        if limit < 1 or limit > 100:
+            return err("limit must be 1-100", code="invalid_input")
+
+    wf_id = args.get("workflow_id")
+    status = args.get("status")
+
+    params = []
+    if limit:
+        params.append(f"take={limit}")
+    if wf_id:
+        wf_id = require_str(str(wf_id), "workflow_id", max_len=64,
+                            pattern=r"[A-Za-z0-9]+")
+        params.append(f"workflowId={wf_id}")
+    if status:
+        params.append(f"status={status}")
+    qs = "?" + "&".join(params) if params else ""
+
+    resp = await _n8n_request("GET", f"/executions{qs}")
+    if "_error" in resp:
+        return err(f"n8n request failed: {resp['_error']}", code="http_error")
+    if not resp["ok"]:
+        return err(f"n8n returned HTTP {resp['status']}", code="http_status",
+                   detail=resp["data"])
+
+    data = resp["data"]
+    executions = data.get("data", data) if isinstance(data, dict) else data
+    return ok({
+        "count": len(executions) if isinstance(executions, list) else 0,
+        "executions": executions,
+    })
+
+
+async def _rest_get_execution(args: dict[str, Any]) -> dict[str, Any]:
+    """Get execution details via REST API."""
+    err_msg = _check_config()
+    if err_msg:
+        return err(err_msg, code="missing_config")
+
+    exec_id = require_str(args["execution_id"], "execution_id", max_len=64,
+                          pattern=r"[0-9]+")
+
+    resp = await _n8n_request("GET", f"/executions/{exec_id}")
+    if "_error" in resp:
+        return err(f"n8n request failed: {resp['_error']}", code="http_error")
+    if not resp["ok"]:
+        return err(f"n8n returned HTTP {resp['status']}", code="http_status",
+                   detail=resp["data"])
+
+    return ok(resp["data"])
+
+
 # ─── Tool handler factory ────────────────────────────────────────────────
 
 def _make_handler(tool_name: str):
-    """Return an async handler that proxies the call to the n8n-mcp subprocess."""
+    """Return an async handler that routes to either REST or stdio bridge."""
+    # Route execution tools to local REST client
+    if tool_name == "n8n_execute_workflow":
+        return _rest_execute_workflow
+    elif tool_name == "n8n_list_executions":
+        return _rest_list_executions
+    elif tool_name == "n8n_get_execution":
+        return _rest_get_execution
+
+    # Route all other tools to upstream stdio bridge
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         require_dict(args, "n8n tool arguments")
         client = _get_client()
@@ -261,7 +434,9 @@ def _register() -> None:
     global _registered
     if _registered:
         return
-    for tdef in _N8N_MCP_TOOLS:
+
+    # Register upstream stdio bridge tools
+    for tdef in _UPSTREAM_TOOLS:
         name = tdef["name"]
         server.tools[name] = Tool(
             name=name,
@@ -269,7 +444,20 @@ def _register() -> None:
             handler=_make_handler(name),
             input_schema=tdef["schema"],
         )
+
+    # Register local REST execution tools
+    for tdef in _LOCAL_REST_TOOLS:
+        name = tdef["name"]
+        server.tools[name] = Tool(
+            name=name,
+            description=tdef["desc"],
+            handler=_make_handler(name),
+            input_schema=tdef["schema"],
+        )
+
     _registered = True
+    log.info("Registered %d upstream + %d local REST n8n tools",
+             len(_UPSTREAM_TOOLS), len(_LOCAL_REST_TOOLS))
 
 
 def get_server() -> Server:
@@ -280,7 +468,21 @@ def get_server() -> Server:
 # ─── Direct call (used by telegram_bot bridge) ───────────────────────────
 
 async def call_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """Direct tool call — used by the Telegram bot dispatch bridge."""
+    """Direct tool call — used by the Telegram bot dispatch bridge.
+
+    Routes to appropriate backend (REST or stdio bridge).
+    """
+    _register()  # Ensure tools are registered
+
+    # Route execution tools to REST handlers
+    if tool_name == "n8n_execute_workflow":
+        return await _rest_execute_workflow(args)
+    elif tool_name == "n8n_list_executions":
+        return await _rest_list_executions(args)
+    elif tool_name == "n8n_get_execution":
+        return await _rest_get_execution(args)
+
+    # Route all other tools to stdio bridge
     client = _get_client()
     try:
         text = await client.call_tool(tool_name, args)
