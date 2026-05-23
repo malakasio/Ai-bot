@@ -740,6 +740,44 @@ async def _llm_call(
         raise
 
 
+# ─── Orchestrator integration ────────────────────────────────────────────
+
+
+def _should_use_orchestrator(prompt: str) -> bool:
+    """Heuristic detection of complex tasks that benefit from orchestration.
+
+    Checks:
+    - Prompt length (> threshold)
+    - Complexity keywords (analyze, research, investigate, etc.)
+    - Multiple questions (3+)
+
+    Returns:
+        True if task appears complex enough for multi-agent orchestration.
+    """
+    # Length threshold (configurable via env)
+    min_length = int(os.environ.get("JARVIS_ORCHESTRATOR_MIN_LENGTH", "800"))
+    if len(prompt) > min_length:
+        return True
+
+    # Keyword detection
+    complexity_keywords = [
+        "analyze", "compare", "research", "investigate",
+        "comprehensive", "thorough", "deep dive", "ultrathink",
+        "multiple", "various", "several aspects", "explore",
+        "examine", "study", "review", "assess", "evaluate"
+    ]
+    prompt_lower = prompt.lower()
+    keyword_count = sum(1 for kw in complexity_keywords if kw in prompt_lower)
+    if keyword_count >= 3:
+        return True
+
+    # Multiple questions heuristic
+    if prompt.count("?") >= 3:
+        return True
+
+    return False
+
+
 # ─── Main loop ────────────────────────────────────────────────────────────
 
 
@@ -763,8 +801,26 @@ async def run_jarvis_core(
     max_iterations: int = MAX_ITERATIONS,
     max_output_tokens: int = DEFAULT_OUTPUT_TOKEN_BUDGET,
     input_token_limit: int = DEFAULT_INPUT_TOKEN_LIMIT,
+    use_orchestrator: Optional[bool] = None,
 ) -> AgentRun:
     """Run the agent loop.
+
+    Args:
+        user_prompt: The user's input text.
+        client: Anthropic client (auto-created if None).
+        model: Model name (defaults to JARVIS_AGENT_MODEL or DEFAULT_MODEL).
+        system: System prompt override.
+        tools: Tool definitions for tool use.
+        max_iterations: Maximum agent loop iterations.
+        max_output_tokens: Token budget per LLM call.
+        input_token_limit: Pre-flight token budget check.
+        use_orchestrator: If True, use multi-agent orchestration for complex tasks.
+                         If None (default), auto-detect based on task complexity
+                         and JARVIS_ENABLE_ORCHESTRATOR env var.
+                         If False, always use single-agent loop.
+
+    Returns:
+        AgentRun with final_message, transcript, and metadata.
 
     Stops when:
       * the model returns a turn with stop_reason != 'tool_use' (final answer),
@@ -778,6 +834,71 @@ async def run_jarvis_core(
         "run_id": run.run_id, "model": model or DEFAULT_MODEL,
         "max_iterations": max_iterations,
     })
+
+    # ─── Orchestration routing ───────────────────────────────────────────
+    # Check if task should use multi-agent orchestration.
+    # Feature is opt-in via JARVIS_ENABLE_ORCHESTRATOR env var.
+
+    if use_orchestrator is None:
+        # Auto-detect complexity if orchestration is enabled
+        enable_orch = os.environ.get("JARVIS_ENABLE_ORCHESTRATOR", "false").lower() == "true"
+        if enable_orch:
+            use_orchestrator = _should_use_orchestrator(user_prompt)
+            log.info("agent.orchestration.auto_detect", extra={
+                "run_id": run.run_id,
+                "use_orchestrator": use_orchestrator,
+                "prompt_length": len(user_prompt),
+            })
+        else:
+            use_orchestrator = False
+
+    if use_orchestrator:
+        log.info("agent.orchestration.start", extra={"run_id": run.run_id})
+        try:
+            # Lazy import to avoid circular dependency
+            # (orchestrator.py imports run_jarvis_core)
+            from core.orchestrator import run_orchestrated
+
+            # Run multi-agent orchestration
+            orch_result = await run_orchestrated(user_prompt)
+
+            # Convert orchestrator dict to AgentRun format
+            run.stopped_reason = "orchestration_complete"
+            run.final_message = orch_result.get("output", "")
+            run.iterations = orch_result.get("subtasks", 0)
+
+            # Add orchestration metadata to transcript
+            run.transcript.append({
+                "type": "orchestration_summary",
+                "success": orch_result.get("success", False),
+                "score": orch_result.get("score", 0.0),
+                "duration_ms": orch_result.get("duration_ms", 0.0),
+                "subtasks": orch_result.get("subtasks", 0),
+                "accepted": orch_result.get("accepted", 0),
+            })
+
+            log.info("agent.orchestration.complete", extra={
+                "run_id": run.run_id,
+                "score": orch_result.get("score"),
+                "subtasks": orch_result.get("subtasks"),
+                "accepted": orch_result.get("accepted"),
+                "duration_ms": orch_result.get("duration_ms"),
+            })
+
+            return run
+
+        except Exception as e:
+            log.error("agent.orchestration.failed", extra={
+                "run_id": run.run_id,
+                "exc": repr(e),
+            })
+            # Fall back to single-agent loop
+            log.info("agent.orchestration.fallback_to_single", extra={
+                "run_id": run.run_id,
+            })
+            use_orchestrator = False
+
+    # ─── Single-agent loop (existing behavior) ───────────────────────────
 
     if client is None:
         client = build_async_client()
