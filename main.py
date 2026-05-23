@@ -5,6 +5,7 @@ This is the single entrypoint that wires every v7.0 subsystem together:
   * Agent loop          (core.agent)        — invokable via HTTP /agent/run
   * Red-Zone Sentinel   (core.sentinel)     — background asyncio task
   * KAIROS daemon       (core.kairos)       — background asyncio task
+  * God Mode            (godmode)           — autonomous multi-agent orchestration
   * Voice WebSocket     (voice.websocket_server) — mounted at /voice
   * Observability       (observability.dashboard) — mounted at /obs
   * MCP router          (mcp.router)        — exposed via /mcp/* and
@@ -25,7 +26,7 @@ milliseconds, no matter what else is broken:
      lifespan runs, before any subsystem import. The probe handler
      does not import core.agent, mcp.router, or any other v7.0
      module — it just returns {"ok": true}.
-  2. Sub-app mounts (voice, observability) happen INSIDE lifespan,
+  2. Sub-app mounts (voice, observability, godmode) happen INSIDE lifespan,
      each wrapped in try/except. A broken voice mount cannot prevent
      the rest of the app from serving.
   3. MCP-tool registration into the agent is opportunistic. It logs
@@ -47,6 +48,10 @@ Endpoints
   POST /agent/run            — run one agent turn  {"prompt": "..."}
   GET  /mcp/tools            — list MCP tools
   POST /mcp/call             — dispatch an MCP tool
+  GET  /godmode              — God Mode Control Center (Kanban UI)
+  GET  /godmode/tasks        — list God Mode tasks (JSON)
+  POST /godmode/tasks        — create new God Mode task
+  GET  /godmode/events       — SSE stream for real-time updates
   WS   /voice/voice          — voice pipeline WebSocket (mounted in lifespan)
   ANY  /obs/*                — observability dashboard (mounted in lifespan)
 """
@@ -233,6 +238,20 @@ async def _run_telegram() -> None:
     await start_telegram_bot()
 
 
+async def _run_godmode() -> None:
+    """God Mode orchestrator daemon. Polls for approved tasks and
+    executes them in isolated worktrees with validation pipeline.
+    """
+    from pathlib import Path
+    from godmode.orchestrator import GodModeOrchestrator
+
+    repo_root = Path("/root/Ai-bot")
+    orchestrator = GodModeOrchestrator(repo_root)
+
+    poll_interval = int(os.getenv("GODMODE_POLL_INTERVAL", "30"))
+    await orchestrator.run_forever(poll_interval=poll_interval)
+
+
 # ─── FastAPI app ─────────────────────────────────────────────────────────
 
 
@@ -309,6 +328,16 @@ def create_app() -> Any:
                 STATE.mount_errors.append(f"obs: {e!r}")
                 log.warning("mount.obs failed: %r", e)
 
+        # Mount God Mode Control Center
+        if os.environ.get("GODMODE_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
+            try:
+                from godmode.api import router as godmode_router
+                app.include_router(godmode_router)
+                log.info("mount.godmode ok")
+            except Exception as e:  # noqa: BLE001
+                STATE.mount_errors.append(f"godmode: {e!r}")
+                log.warning("mount.godmode failed: %r", e)
+
         # 3) Start daemons (each in its own supervised task; the lifespan
         # itself does NOT await them — it yields immediately).
         if os.environ.get("KAIROS_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
@@ -339,6 +368,13 @@ def create_app() -> Any:
             else:
                 log.info("telegram bot not configured "
                          "(set TELEGRAM_BOT_TOKEN and TELEGRAM_USER_ID to enable)")
+
+        # God Mode orchestrator daemon
+        if os.environ.get("GODMODE_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
+            sup = _Supervisor("godmode", _run_godmode)
+            STATE.supervisors["godmode"] = sup
+            sup.start()
+            log.info("daemon.godmode started")
 
         STATE.lifespan_complete = True
         log.info("lifespan.ready: port bound, daemons supervised")
@@ -466,6 +502,7 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
   <li><a href="/healthz">/healthz</a> &middot; <a href="/health">/health</a> &middot; <a href="/ping">/ping</a> &middot; <a href="/readyz">/readyz</a></li>
   <li><a href="/mcp/tools">/mcp/tools</a></li>
   <li><a href="/obs/">/obs/</a> (observability dashboard)</li>
+  <li><a href="/godmode">/godmode</a> (God Mode Control Center)</li>
   <li><code>WS /voice/voice</code></li>
   <li><code>POST /agent/run</code> &nbsp; <code>{{"prompt": "..."}}</code></li>
 </ul>
