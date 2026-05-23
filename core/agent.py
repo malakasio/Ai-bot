@@ -54,7 +54,7 @@ except Exception:
 # ─── Constants ────────────────────────────────────────────────────────────
 
 MAX_ITERATIONS: int = 20
-MAX_CONSECUTIVE_FAILURES: int = 5
+MAX_CONSECUTIVE_FAILURES: int = 10
 RETRY_ATTEMPTS: int = 5
 RETRY_MIN_WAIT_S: float = 1.0
 RETRY_MAX_WAIT_S: float = 30.0
@@ -243,6 +243,9 @@ def build_async_client() -> Any:
     given gateway (e.g. an Anthropic-compatible proxy) instead of the
     default https://api.anthropic.com. The SDK reads this env var itself,
     but we pass it explicitly so the behavior is obvious from the trace.
+
+    Timeout defaults to 300s (5 minutes) to prevent indefinite hangs when
+    proxies return empty responses. Override via JARVIS_API_TIMEOUT.
     """
     try:
         from anthropic import AsyncAnthropic
@@ -252,12 +255,13 @@ def build_async_client() -> Any:
         ) from e
     api_key = _load_api_key()
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
-    kwargs: dict[str, Any] = {"api_key": api_key}
+    timeout = float(os.environ.get("JARVIS_API_TIMEOUT", "300.0"))
+    kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout}
     if base_url:
         kwargs["base_url"] = base_url
         try:
             get_logger().info("anthropic.client.base_url",
-                              extra={"base_url": base_url})
+                              extra={"base_url": base_url, "timeout": timeout})
         except Exception:
             pass
     return AsyncAnthropic(**kwargs)
@@ -268,14 +272,22 @@ def build_async_client() -> Any:
 
 def _is_transient(exc: BaseException) -> bool:
     """Classify an exception as transient (worth retrying)."""
+    # json.JSONDecodeError means the upstream returned an empty / invalid
+    # body — e.g. a proxy (giftcat) returning HTTP 200 with no content.
+    # This is inherently transient; the next attempt may get a real body.
+    if isinstance(exc, json.JSONDecodeError):
+        return True
+
     # Defer imports so absence of the SDK doesn't break import-time.
     try:
         from anthropic import (  # type: ignore[attr-defined]
             APIConnectionError, APITimeoutError, RateLimitError,
             InternalServerError, APIStatusError,
         )
-        if isinstance(exc, (APIConnectionError, APITimeoutError,
-                            RateLimitError, InternalServerError)):
+        if isinstance(exc, (APIConnectionError,
+                            APITimeoutError,
+                            RateLimitError,
+                            InternalServerError)):
             return True
         if isinstance(exc, APIStatusError):
             return 500 <= getattr(exc, "status_code", 0) < 600
@@ -673,7 +685,16 @@ async def _llm_call(
         kwargs["system"] = system
     if tools:
         kwargs["tools"] = tools
-    return await client.messages.create(**kwargs)
+    base_url = os.environ.get('ANTHROPIC_BASE_URL', '').strip()
+    try:
+        return await client.messages.create(**kwargs)
+    except json.JSONDecodeError as e:
+        ctx = f'anthropic_api={base_url}' if base_url else 'direct_anthropic'
+        get_logger().warning(
+            f'LLM returned empty / invalid JSON response '
+            f'({ctx}) — will retry'
+        )
+        raise
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────
@@ -791,10 +812,12 @@ async def run_jarvis_core(
             })
             if run.breaker.tripped:
                 run.stopped_reason = "circuit_breaker_tripped"
+                timeout = os.environ.get("JARVIS_API_TIMEOUT", "300.0")
                 await send_telegram_alert(
                     f"JARVIS: circuit breaker tripped "
                     f"after {run.breaker.consecutive_failures} consecutive "
-                    f"failures on run {run.run_id}. Last error: {e!r}"
+                    f"failures on run {run.run_id} (timeout={timeout}s). "
+                    f"Last error: {e!r}"
                 )
                 break
             continue  # let the retry-wrapped next iteration try again
@@ -863,10 +886,12 @@ async def run_jarvis_core(
                 })
                 if run.breaker.tripped:
                     run.stopped_reason = "circuit_breaker_tripped"
+                    timeout = os.environ.get("JARVIS_API_TIMEOUT", "300.0")
                     await send_telegram_alert(
                         f"JARVIS: circuit breaker tripped on tool failures "
                         f"({run.breaker.consecutive_failures} consecutive) "
-                        f"in run {run.run_id}. Last: {tu_name} -> {e!r}"
+                        f"in run {run.run_id} (timeout={timeout}s). "
+                        f"Last: {tu_name} -> {e!r}"
                     )
                     break
             if run.breaker.tripped:
