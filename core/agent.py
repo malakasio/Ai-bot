@@ -754,9 +754,35 @@ def _should_use_orchestrator(prompt: str) -> bool:
     Returns:
         True if task appears complex enough for multi-agent orchestration.
     """
+    log = get_logger()
+
+    # Check if orchestrator is enabled
+    enable_orch_raw = os.environ.get("JARVIS_ENABLE_ORCHESTRATOR", "false")
+    enable_orch = enable_orch_raw.lower() == "true"
+
+    log.info("orchestrator.should_use.check", extra={
+        "JARVIS_ENABLE_ORCHESTRATOR_raw": enable_orch_raw,
+        "JARVIS_ENABLE_ORCHESTRATOR_parsed": enable_orch,
+        "prompt_length": len(prompt),
+    })
+
     # Length threshold (configurable via env)
     min_length = int(os.environ.get("JARVIS_ORCHESTRATOR_MIN_LENGTH", "800"))
-    if len(prompt) > min_length:
+    length_check = len(prompt) > min_length
+
+    log.info("orchestrator.should_use.length_check", extra={
+        "prompt_length": len(prompt),
+        "min_length_threshold": min_length,
+        "length_check_passed": length_check,
+    })
+
+    if length_check:
+        log.info("orchestrator.should_use.decision", extra={
+            "decision": True,
+            "reason": "prompt_length_exceeded",
+            "prompt_length": len(prompt),
+            "threshold": min_length,
+        })
         return True
 
     # Keyword detection
@@ -767,14 +793,51 @@ def _should_use_orchestrator(prompt: str) -> bool:
         "examine", "study", "review", "assess", "evaluate"
     ]
     prompt_lower = prompt.lower()
-    keyword_count = sum(1 for kw in complexity_keywords if kw in prompt_lower)
-    if keyword_count >= 3:
+    detected_keywords = [kw for kw in complexity_keywords if kw in prompt_lower]
+    keyword_count = len(detected_keywords)
+    keyword_check = keyword_count >= 3
+
+    log.info("orchestrator.should_use.keyword_check", extra={
+        "detected_keywords": detected_keywords,
+        "keyword_count": keyword_count,
+        "keyword_threshold": 3,
+        "keyword_check_passed": keyword_check,
+    })
+
+    if keyword_check:
+        log.info("orchestrator.should_use.decision", extra={
+            "decision": True,
+            "reason": "keyword_threshold_exceeded",
+            "detected_keywords": detected_keywords,
+            "keyword_count": keyword_count,
+        })
         return True
 
     # Multiple questions heuristic
-    if prompt.count("?") >= 3:
+    question_count = prompt.count("?")
+    question_check = question_count >= 3
+
+    log.info("orchestrator.should_use.question_check", extra={
+        "question_count": question_count,
+        "question_threshold": 3,
+        "question_check_passed": question_check,
+    })
+
+    if question_check:
+        log.info("orchestrator.should_use.decision", extra={
+            "decision": True,
+            "reason": "multiple_questions",
+            "question_count": question_count,
+        })
         return True
 
+    log.info("orchestrator.should_use.decision", extra={
+        "decision": False,
+        "reason": "no_complexity_indicators",
+        "prompt_length": len(prompt),
+        "keyword_count": keyword_count,
+        "question_count": question_count,
+    })
     return False
 
 
@@ -839,10 +902,28 @@ async def run_jarvis_core(
     # Check if task should use multi-agent orchestration.
     # Feature is opt-in via JARVIS_ENABLE_ORCHESTRATOR env var.
 
+    log.info("agent.orchestration.routing_start", extra={
+        "run_id": run.run_id,
+        "use_orchestrator_param": use_orchestrator,
+        "prompt_length": len(user_prompt),
+    })
+
     if use_orchestrator is None:
         # Auto-detect complexity if orchestration is enabled
-        enable_orch = os.environ.get("JARVIS_ENABLE_ORCHESTRATOR", "false").lower() == "true"
+        enable_orch_raw = os.environ.get("JARVIS_ENABLE_ORCHESTRATOR", "false")
+        enable_orch = enable_orch_raw.lower() == "true"
+
+        log.info("agent.orchestration.env_check", extra={
+            "run_id": run.run_id,
+            "JARVIS_ENABLE_ORCHESTRATOR_raw": enable_orch_raw,
+            "JARVIS_ENABLE_ORCHESTRATOR_parsed": enable_orch,
+        })
+
         if enable_orch:
+            log.info("agent.orchestration.calling_should_use", extra={
+                "run_id": run.run_id,
+                "prompt_length": len(user_prompt),
+            })
             use_orchestrator = _should_use_orchestrator(user_prompt)
             log.info("agent.orchestration.auto_detect", extra={
                 "run_id": run.run_id,
@@ -850,7 +931,16 @@ async def run_jarvis_core(
                 "prompt_length": len(user_prompt),
             })
         else:
+            log.info("agent.orchestration.disabled", extra={
+                "run_id": run.run_id,
+                "reason": "JARVIS_ENABLE_ORCHESTRATOR not true",
+            })
             use_orchestrator = False
+    else:
+        log.info("agent.orchestration.explicit_param", extra={
+            "run_id": run.run_id,
+            "use_orchestrator": use_orchestrator,
+        })
 
     if use_orchestrator:
         log.info("agent.orchestration.start", extra={"run_id": run.run_id})
