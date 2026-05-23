@@ -40,6 +40,7 @@ from typing import Any, Awaitable, Callable, Optional
 # from this file so it works regardless of CWD when the agent is invoked.
 try:
     from dotenv import load_dotenv as _load_dotenv  # type: ignore
+
     _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
     if _ENV_FILE.is_file():
         _load_dotenv(_ENV_FILE, override=False)
@@ -64,7 +65,7 @@ RETRY_MAX_WAIT_S: float = 30.0
 # for the Claude family. We err on the high side (conservative ~3.5) so the
 # guard rarely under-estimates.
 CHARS_PER_TOKEN: float = 3.5
-DEFAULT_INPUT_TOKEN_LIMIT: int = 180_000   # Claude-Sonnet/Opus context cap
+DEFAULT_INPUT_TOKEN_LIMIT: int = 180_000  # Claude-Sonnet/Opus context cap
 DEFAULT_OUTPUT_TOKEN_BUDGET: int = 4_096
 
 # Default model — overridable via env JARVIS_AGENT_MODEL.
@@ -99,12 +100,33 @@ def _resolve_trace_path() -> Path:
 #       payload["level"], payload["logger"], etc.), and
 #   (b) the helper below can rename colliding keys before they reach
 #       logger.info(..., extra=...).
-_RESERVED_RECORD_ATTRS = frozenset({
-    "args", "asctime", "created", "exc_info", "exc_text", "filename",
-    "funcName", "levelname", "levelno", "lineno", "message", "module",
-    "msecs", "msg", "name", "pathname", "process", "processName",
-    "relativeCreated", "stack_info", "thread", "threadName", "taskName",
-})
+_RESERVED_RECORD_ATTRS = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "thread",
+        "threadName",
+        "taskName",
+    }
+)
 
 
 def _sanitize_extra(extra: dict[str, Any]) -> dict[str, Any]:
@@ -127,7 +149,7 @@ class _JsonLineFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:  # noqa: D401
         payload: dict[str, Any] = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
-                  + f".{int(record.msecs):03d}Z",
+            + f".{int(record.msecs):03d}Z",
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
@@ -193,8 +215,7 @@ def get_logger() -> logging.LoggerAdapter:
 
     adapter = _SafeExtraAdapter(log, {})
     _logger = adapter
-    adapter.info("agent logger initialized",
-                 extra={"trace_path": str(trace_path)})
+    adapter.info("agent logger initialized", extra={"trace_path": str(trace_path)})
     return adapter
 
 
@@ -257,9 +278,7 @@ def build_async_client() -> Any:
     try:
         from anthropic import AsyncAnthropic
     except ImportError as e:
-        raise RuntimeError(
-            "anthropic SDK not installed; pip install anthropic"
-        ) from e
+        raise RuntimeError("anthropic SDK not installed; pip install anthropic") from e
     api_key = _load_api_key()
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
     timeout = float(os.environ.get("JARVIS_API_TIMEOUT", "300.0"))
@@ -281,31 +300,26 @@ def build_async_client() -> Any:
                 "api_key": NOT_GIVEN,
                 "base_url": base_url,
                 "http_client": http_client,
-                "default_headers": {
-                    "Authorization": f"Bearer {api_key}",
-                    "X-Api-Key": Omit()
-                }
+                "default_headers": {"Authorization": f"Bearer {api_key}", "X-Api-Key": Omit()},
             }
         except ImportError:
             # Fallback if SDK version doesn't support Omit
             import httpx
+
             http_client = httpx.AsyncClient(
-                timeout=timeout,
-                headers={"Authorization": f"Bearer {api_key}"}
+                timeout=timeout, headers={"Authorization": f"Bearer {api_key}"}
             )
             kwargs: dict[str, Any] = {
                 "api_key": "unused",
                 "base_url": base_url,
-                "http_client": http_client
+                "http_client": http_client,
             }
 
         try:
-            get_logger().info("anthropic.client.proxy_mode",
-                              extra={
-                                  "base_url": base_url,
-                                  "timeout": timeout,
-                                  "auth_header": "Bearer"
-                              })
+            get_logger().info(
+                "anthropic.client.proxy_mode",
+                extra={"base_url": base_url, "timeout": timeout, "auth_header": "Bearer"},
+            )
         except Exception:
             pass
     else:
@@ -329,13 +343,16 @@ def _is_transient(exc: BaseException) -> bool:
     # Defer imports so absence of the SDK doesn't break import-time.
     try:
         from anthropic import (  # type: ignore[attr-defined]
-            APIConnectionError, APITimeoutError, RateLimitError,
-            InternalServerError, APIStatusError,
+            APIConnectionError,
+            APITimeoutError,
+            RateLimitError,
+            InternalServerError,
+            APIStatusError,
         )
-        if isinstance(exc, (APIConnectionError,
-                            APITimeoutError,
-                            RateLimitError,
-                            InternalServerError)):
+
+        if isinstance(
+            exc, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)
+        ):
             return True
         if isinstance(exc, APIStatusError):
             return 500 <= getattr(exc, "status_code", 0) < 600
@@ -344,8 +361,11 @@ def _is_transient(exc: BaseException) -> bool:
 
     try:
         import httpx
-        if isinstance(exc, (httpx.ConnectError, httpx.ReadTimeout,
-                            httpx.RemoteProtocolError, httpx.WriteTimeout)):
+
+        if isinstance(
+            exc,
+            (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.WriteTimeout),
+        ):
             return True
     except Exception:
         pass
@@ -363,8 +383,11 @@ def retry_transient(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitabl
     """
     try:
         from tenacity import (
-            AsyncRetrying, stop_after_attempt, wait_random_exponential,
-            retry_if_exception, before_sleep_log,
+            AsyncRetrying,
+            stop_after_attempt,
+            wait_random_exponential,
+            retry_if_exception,
+            before_sleep_log,
         )
 
         async def wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -372,7 +395,9 @@ def retry_transient(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitabl
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(RETRY_ATTEMPTS),
                 wait=wait_random_exponential(
-                    multiplier=1, min=RETRY_MIN_WAIT_S, max=RETRY_MAX_WAIT_S,
+                    multiplier=1,
+                    min=RETRY_MIN_WAIT_S,
+                    max=RETRY_MAX_WAIT_S,
                 ),
                 retry=retry_if_exception(_is_transient),
                 before_sleep=before_sleep_log(log, logging.WARNING),
@@ -380,6 +405,7 @@ def retry_transient(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitabl
             ):
                 with attempt:
                     return await fn(*args, **kwargs)
+
         return wrapped
 
     except ImportError:
@@ -410,15 +436,18 @@ def retry_transient(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitabl
                         },
                     )
                     await asyncio.sleep(delay)
+
         return wrapped
 
 
 # ─── Token estimation ─────────────────────────────────────────────────────
 
 
-def estimate_tokens(messages: list[dict[str, Any]],
-                    system: Optional[str] = None,
-                    tools: Optional[list[dict[str, Any]]] = None) -> int:
+def estimate_tokens(
+    messages: list[dict[str, Any]],
+    system: Optional[str] = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+) -> int:
     """Conservative pre-flight estimate of input tokens for a Messages call.
 
     Walks the structured request the same way the API does and sums character
@@ -444,8 +473,7 @@ def estimate_tokens(messages: list[dict[str, Any]],
                 if btype == "text":
                     chars += len(block.get("text", ""))
                 elif btype == "tool_use":
-                    chars += len(json.dumps(block.get("input", {}),
-                                            ensure_ascii=False))
+                    chars += len(json.dumps(block.get("input", {}), ensure_ascii=False))
                     chars += len(block.get("name", "")) + 16
                 elif btype == "tool_result":
                     tc = block.get("content", "")
@@ -487,23 +515,28 @@ class CircuitBreaker:
 async def send_telegram_alert(text: str) -> bool:
     """Best-effort Telegram notification. Returns True on success."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_USER_ID", "").strip() or \
-              os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    chat_id = (
+        os.environ.get("TELEGRAM_USER_ID", "").strip()
+        or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    )
     if not token or not chat_id:
         get_logger().warning("telegram alert skipped: missing creds")
         return False
     try:
         import httpx
+
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         async with httpx.AsyncClient(timeout=10.0) as c:
-            resp = await c.post(url, json={
-                "chat_id": chat_id,
-                "text": text,
-                "disable_web_page_preview": True,
-            })
+            resp = await c.post(
+                url,
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "disable_web_page_preview": True,
+                },
+            )
             ok = resp.status_code == 200 and resp.json().get("ok", False)
-            get_logger().info("telegram alert sent",
-                              extra={"ok": ok, "status": resp.status_code})
+            get_logger().info("telegram alert sent", extra={"ok": ok, "status": resp.status_code})
             return ok
     except Exception as e:
         get_logger().error("telegram alert failed", extra={"exc": repr(e)})
@@ -543,12 +576,18 @@ def clear_mcp_tools() -> None:
 
 DESTRUCTIVE_TOOLS: set[str] = {
     # filesystem MCP
-    "write_file", "delete",
-    "filesystem.write_file", "filesystem.delete",
+    "write_file",
+    "delete",
+    "filesystem.write_file",
+    "filesystem.delete",
     # shell MCP, if registered
-    "exec", "shell.exec",
+    "exec",
+    "shell.exec",
     # git MCP — only mutating ops
-    "commit", "git.commit", "stage", "git.stage",
+    "commit",
+    "git.commit",
+    "stage",
+    "git.stage",
     # P3 protocol scope: local filesystem mutation only.
     # External side-effects (n8n, apify, browser) do NOT require snapshots.
 }
@@ -593,28 +632,33 @@ async def _create_snapshot(reason: str) -> Optional[str]:
     log = get_logger()
     script = Path(__file__).resolve().parent.parent / "scripts" / "snapshot.sh"
     if not script.exists():
-        log.warning("agent.snapshot.script_missing",
-                    extra={"path": str(script)})
+        log.warning("agent.snapshot.script_missing", extra={"path": str(script)})
         return None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "bash", str(script), reason, "--no-push",
+            "bash",
+            str(script),
+            reason,
+            "--no-push",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(),
-                                                timeout=30.0)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
     except Exception as e:
         log.warning("agent.snapshot.exec_failed", extra={"exc": repr(e)})
         return None
     if proc.returncode != 0:
-        log.warning("agent.snapshot.rc_nonzero", extra={
-            "rc": proc.returncode,
-            "stderr": stderr.decode("utf-8", "replace")[:512],
-        })
+        log.warning(
+            "agent.snapshot.rc_nonzero",
+            extra={
+                "rc": proc.returncode,
+                "stderr": stderr.decode("utf-8", "replace")[:512],
+            },
+        )
         return None
     tag = stdout.decode("utf-8", "replace").strip().splitlines()[-1:]
     return tag[0] if tag else None
+
 
 def _attr_or_dict(obj: Any, field: str, default: Any = None) -> Any:
     """Safely read *field* from an SDK object (via getattr) or a dict (via .get).
@@ -627,7 +671,6 @@ def _attr_or_dict(obj: Any, field: str, default: Any = None) -> Any:
         return obj.get(field, default)
     attr = getattr(obj, field, None)
     return default if attr is None else attr
-
 
 
 async def execute_mcp_tool(name: str, tool_input: dict[str, Any]) -> Any:
@@ -650,16 +693,18 @@ async def execute_mcp_tool(name: str, tool_input: dict[str, Any]) -> Any:
 
     snapshot_tag: Optional[str] = None
     if is_destructive(name):
-        require = os.environ.get("JARVIS_REQUIRE_SNAPSHOT", "true") \
-                    .lower() in {"1", "true", "yes", "on"}
+        require = os.environ.get("JARVIS_REQUIRE_SNAPSHOT", "true").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         reason = f"agent:tool:{name}"
         snapshot_tag = await _create_snapshot(reason)
         if snapshot_tag:
-            log.info("agent.snapshot.created",
-                     extra={"tool": name, "tag": snapshot_tag})
+            log.info("agent.snapshot.created", extra={"tool": name, "tag": snapshot_tag})
         else:
-            log.warning("agent.snapshot.unavailable",
-                        extra={"tool": name, "require": require})
+            log.warning("agent.snapshot.unavailable", extra={"tool": name, "require": require})
             if require:
                 raise RuntimeError(
                     f"refusing destructive tool {name!r}: snapshot failed "
@@ -669,6 +714,7 @@ async def execute_mcp_tool(name: str, tool_input: dict[str, Any]) -> Any:
     # Instrument with the observability layer (OTel span + trace events).
     try:
         from observability import tracing as _otrace
+
         _tool_ctx = _otrace.instrument_tool_call(
             tool=name,
             is_destructive=is_destructive(name),
@@ -677,31 +723,39 @@ async def execute_mcp_tool(name: str, tool_input: dict[str, Any]) -> Any:
     except Exception:
         # Observability missing? Fall back to a no-op context.
         import contextlib as _ctx
+
         @_ctx.contextmanager
         def _noop_tool():
             yield {}
+
         _tool_ctx = _noop_tool()
 
     t0 = time.monotonic()
     with _tool_ctx as _:
         try:
             result = await handler(tool_input)
-            log.info("mcp.tool.ok", extra={
-                "tool": name,
-                "duration_ms": int((time.monotonic() - t0) * 1000),
-                "snapshot": snapshot_tag,
-            })
+            log.info(
+                "mcp.tool.ok",
+                extra={
+                    "tool": name,
+                    "duration_ms": int((time.monotonic() - t0) * 1000),
+                    "snapshot": snapshot_tag,
+                },
+            )
             # Decorate the result with the rollback tag when applicable.
             if snapshot_tag and isinstance(result, dict):
                 result = {**result, "_snapshot": snapshot_tag}
             return result
         except Exception as e:
-            log.error("mcp.tool.fail", extra={
-                "tool": name,
-                "duration_ms": int((time.monotonic() - t0) * 1000),
-                "exc": repr(e),
-                "snapshot": snapshot_tag,
-            })
+            log.error(
+                "mcp.tool.fail",
+                extra={
+                    "tool": name,
+                    "duration_ms": int((time.monotonic() - t0) * 1000),
+                    "exc": repr(e),
+                    "snapshot": snapshot_tag,
+                },
+            )
             raise
 
 
@@ -728,15 +782,12 @@ async def _llm_call(
         kwargs["system"] = system
     if tools:
         kwargs["tools"] = tools
-    base_url = os.environ.get('ANTHROPIC_BASE_URL', '').strip()
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
     try:
         return await client.messages.create(**kwargs)
-    except json.JSONDecodeError as e:
-        ctx = f'anthropic_api={base_url}' if base_url else 'direct_anthropic'
-        get_logger().warning(
-            f'LLM returned empty / invalid JSON response '
-            f'({ctx}) — will retry'
-        )
+    except json.JSONDecodeError:
+        ctx = f"anthropic_api={base_url}" if base_url else "direct_anthropic"
+        get_logger().warning(f"LLM returned empty / invalid JSON response ({ctx}) — will retry")
         raise
 
 
@@ -760,84 +811,121 @@ def _should_use_orchestrator(prompt: str) -> bool:
     enable_orch_raw = os.environ.get("JARVIS_ENABLE_ORCHESTRATOR", "false")
     enable_orch = enable_orch_raw.lower() == "true"
 
-    log.info("orchestrator.should_use.check", extra={
-        "JARVIS_ENABLE_ORCHESTRATOR_raw": enable_orch_raw,
-        "JARVIS_ENABLE_ORCHESTRATOR_parsed": enable_orch,
-        "prompt_length": len(prompt),
-    })
+    log.info(
+        "orchestrator.should_use.check",
+        extra={
+            "JARVIS_ENABLE_ORCHESTRATOR_raw": enable_orch_raw,
+            "JARVIS_ENABLE_ORCHESTRATOR_parsed": enable_orch,
+            "prompt_length": len(prompt),
+        },
+    )
 
     # Length threshold (configurable via env)
     min_length = int(os.environ.get("JARVIS_ORCHESTRATOR_MIN_LENGTH", "800"))
     length_check = len(prompt) > min_length
 
-    log.info("orchestrator.should_use.length_check", extra={
-        "prompt_length": len(prompt),
-        "min_length_threshold": min_length,
-        "length_check_passed": length_check,
-    })
+    log.info(
+        "orchestrator.should_use.length_check",
+        extra={
+            "prompt_length": len(prompt),
+            "min_length_threshold": min_length,
+            "length_check_passed": length_check,
+        },
+    )
 
     if length_check:
-        log.info("orchestrator.should_use.decision", extra={
-            "decision": True,
-            "reason": "prompt_length_exceeded",
-            "prompt_length": len(prompt),
-            "threshold": min_length,
-        })
+        log.info(
+            "orchestrator.should_use.decision",
+            extra={
+                "decision": True,
+                "reason": "prompt_length_exceeded",
+                "prompt_length": len(prompt),
+                "threshold": min_length,
+            },
+        )
         return True
 
     # Keyword detection
     complexity_keywords = [
-        "analyze", "compare", "research", "investigate",
-        "comprehensive", "thorough", "deep dive", "ultrathink",
-        "multiple", "various", "several aspects", "explore",
-        "examine", "study", "review", "assess", "evaluate"
+        "analyze",
+        "compare",
+        "research",
+        "investigate",
+        "comprehensive",
+        "thorough",
+        "deep dive",
+        "ultrathink",
+        "multiple",
+        "various",
+        "several aspects",
+        "explore",
+        "examine",
+        "study",
+        "review",
+        "assess",
+        "evaluate",
     ]
     prompt_lower = prompt.lower()
     detected_keywords = [kw for kw in complexity_keywords if kw in prompt_lower]
     keyword_count = len(detected_keywords)
     keyword_check = keyword_count >= 3
 
-    log.info("orchestrator.should_use.keyword_check", extra={
-        "detected_keywords": detected_keywords,
-        "keyword_count": keyword_count,
-        "keyword_threshold": 3,
-        "keyword_check_passed": keyword_check,
-    })
-
-    if keyword_check:
-        log.info("orchestrator.should_use.decision", extra={
-            "decision": True,
-            "reason": "keyword_threshold_exceeded",
+    log.info(
+        "orchestrator.should_use.keyword_check",
+        extra={
             "detected_keywords": detected_keywords,
             "keyword_count": keyword_count,
-        })
+            "keyword_threshold": 3,
+            "keyword_check_passed": keyword_check,
+        },
+    )
+
+    if keyword_check:
+        log.info(
+            "orchestrator.should_use.decision",
+            extra={
+                "decision": True,
+                "reason": "keyword_threshold_exceeded",
+                "detected_keywords": detected_keywords,
+                "keyword_count": keyword_count,
+            },
+        )
         return True
 
     # Multiple questions heuristic
     question_count = prompt.count("?")
     question_check = question_count >= 3
 
-    log.info("orchestrator.should_use.question_check", extra={
-        "question_count": question_count,
-        "question_threshold": 3,
-        "question_check_passed": question_check,
-    })
+    log.info(
+        "orchestrator.should_use.question_check",
+        extra={
+            "question_count": question_count,
+            "question_threshold": 3,
+            "question_check_passed": question_check,
+        },
+    )
 
     if question_check:
-        log.info("orchestrator.should_use.decision", extra={
-            "decision": True,
-            "reason": "multiple_questions",
-            "question_count": question_count,
-        })
+        log.info(
+            "orchestrator.should_use.decision",
+            extra={
+                "decision": True,
+                "reason": "multiple_questions",
+                "question_count": question_count,
+            },
+        )
         return True
 
-    log.info("orchestrator.should_use.decision", extra={
-        "decision": False,
-        "reason": "no_complexity_indicators",
-        "prompt_length": len(prompt),
-        "keyword_count": keyword_count,
-        "question_count": question_count,
-    })
+    log.info(
+        "orchestrator.should_use.decision",
+        extra={
+            "decision": False,
+            "reason": "no_complexity_indicators",
+            "prompt_length": len(prompt),
+            "keyword_count": keyword_count,
+            "question_count": question_count,
+        },
+    )
     return False
 
 
@@ -893,54 +981,76 @@ async def run_jarvis_core(
     """
     log = get_logger()
     run = AgentRun()
-    log.info("agent.run.start", extra={
-        "run_id": run.run_id, "model": model or DEFAULT_MODEL,
-        "max_iterations": max_iterations,
-    })
+    log.info(
+        "agent.run.start",
+        extra={
+            "run_id": run.run_id,
+            "model": model or DEFAULT_MODEL,
+            "max_iterations": max_iterations,
+        },
+    )
 
     # ─── Orchestration routing ───────────────────────────────────────────
     # Check if task should use multi-agent orchestration.
     # Feature is opt-in via JARVIS_ENABLE_ORCHESTRATOR env var.
 
-    log.info("agent.orchestration.routing_start", extra={
-        "run_id": run.run_id,
-        "use_orchestrator_param": use_orchestrator,
-        "prompt_length": len(user_prompt),
-    })
+    log.info(
+        "agent.orchestration.routing_start",
+        extra={
+            "run_id": run.run_id,
+            "use_orchestrator_param": use_orchestrator,
+            "prompt_length": len(user_prompt),
+        },
+    )
 
     if use_orchestrator is None:
         # Auto-detect complexity if orchestration is enabled
         enable_orch_raw = os.environ.get("JARVIS_ENABLE_ORCHESTRATOR", "false")
         enable_orch = enable_orch_raw.lower() == "true"
 
-        log.info("agent.orchestration.env_check", extra={
-            "run_id": run.run_id,
-            "JARVIS_ENABLE_ORCHESTRATOR_raw": enable_orch_raw,
-            "JARVIS_ENABLE_ORCHESTRATOR_parsed": enable_orch,
-        })
+        log.info(
+            "agent.orchestration.env_check",
+            extra={
+                "run_id": run.run_id,
+                "JARVIS_ENABLE_ORCHESTRATOR_raw": enable_orch_raw,
+                "JARVIS_ENABLE_ORCHESTRATOR_parsed": enable_orch,
+            },
+        )
 
         if enable_orch:
-            log.info("agent.orchestration.calling_should_use", extra={
-                "run_id": run.run_id,
-                "prompt_length": len(user_prompt),
-            })
+            log.info(
+                "agent.orchestration.calling_should_use",
+                extra={
+                    "run_id": run.run_id,
+                    "prompt_length": len(user_prompt),
+                },
+            )
             use_orchestrator = _should_use_orchestrator(user_prompt)
-            log.info("agent.orchestration.auto_detect", extra={
-                "run_id": run.run_id,
-                "use_orchestrator": use_orchestrator,
-                "prompt_length": len(user_prompt),
-            })
+            log.info(
+                "agent.orchestration.auto_detect",
+                extra={
+                    "run_id": run.run_id,
+                    "use_orchestrator": use_orchestrator,
+                    "prompt_length": len(user_prompt),
+                },
+            )
         else:
-            log.info("agent.orchestration.disabled", extra={
-                "run_id": run.run_id,
-                "reason": "JARVIS_ENABLE_ORCHESTRATOR not true",
-            })
+            log.info(
+                "agent.orchestration.disabled",
+                extra={
+                    "run_id": run.run_id,
+                    "reason": "JARVIS_ENABLE_ORCHESTRATOR not true",
+                },
+            )
             use_orchestrator = False
     else:
-        log.info("agent.orchestration.explicit_param", extra={
-            "run_id": run.run_id,
-            "use_orchestrator": use_orchestrator,
-        })
+        log.info(
+            "agent.orchestration.explicit_param",
+            extra={
+                "run_id": run.run_id,
+                "use_orchestrator": use_orchestrator,
+            },
+        )
 
     if use_orchestrator:
         log.info("agent.orchestration.start", extra={"run_id": run.run_id})
@@ -958,34 +1068,45 @@ async def run_jarvis_core(
             run.iterations = orch_result.get("subtasks", 0)
 
             # Add orchestration metadata to transcript
-            run.transcript.append({
-                "type": "orchestration_summary",
-                "success": orch_result.get("success", False),
-                "score": orch_result.get("score", 0.0),
-                "duration_ms": orch_result.get("duration_ms", 0.0),
-                "subtasks": orch_result.get("subtasks", 0),
-                "accepted": orch_result.get("accepted", 0),
-            })
+            run.transcript.append(
+                {
+                    "type": "orchestration_summary",
+                    "success": orch_result.get("success", False),
+                    "score": orch_result.get("score", 0.0),
+                    "duration_ms": orch_result.get("duration_ms", 0.0),
+                    "subtasks": orch_result.get("subtasks", 0),
+                    "accepted": orch_result.get("accepted", 0),
+                }
+            )
 
-            log.info("agent.orchestration.complete", extra={
-                "run_id": run.run_id,
-                "score": orch_result.get("score"),
-                "subtasks": orch_result.get("subtasks"),
-                "accepted": orch_result.get("accepted"),
-                "duration_ms": orch_result.get("duration_ms"),
-            })
+            log.info(
+                "agent.orchestration.complete",
+                extra={
+                    "run_id": run.run_id,
+                    "score": orch_result.get("score"),
+                    "subtasks": orch_result.get("subtasks"),
+                    "accepted": orch_result.get("accepted"),
+                    "duration_ms": orch_result.get("duration_ms"),
+                },
+            )
 
             return run
 
         except Exception as e:
-            log.error("agent.orchestration.failed", extra={
-                "run_id": run.run_id,
-                "exc": repr(e),
-            })
+            log.error(
+                "agent.orchestration.failed",
+                extra={
+                    "run_id": run.run_id,
+                    "exc": repr(e),
+                },
+            )
             # Fall back to single-agent loop
-            log.info("agent.orchestration.fallback_to_single", extra={
-                "run_id": run.run_id,
-            })
+            log.info(
+                "agent.orchestration.fallback_to_single",
+                extra={
+                    "run_id": run.run_id,
+                },
+            )
             use_orchestrator = False
 
     # ─── Single-agent loop (existing behavior) ───────────────────────────
@@ -1005,24 +1126,33 @@ async def run_jarvis_core(
         est = estimate_tokens(messages, system=system, tools=tools)
         if est > input_token_limit:
             run.stopped_reason = "token_budget_exceeded"
-            log.error("agent.run.budget_exceeded", extra={
-                "run_id": run.run_id, "estimated_tokens": est,
-                "limit": input_token_limit, "iteration": run.iterations,
-            })
+            log.error(
+                "agent.run.budget_exceeded",
+                extra={
+                    "run_id": run.run_id,
+                    "estimated_tokens": est,
+                    "limit": input_token_limit,
+                    "iteration": run.iterations,
+                },
+            )
             await send_telegram_alert(
-                f"JARVIS: token budget exceeded "
-                f"(~{est} > {input_token_limit}) on run {run.run_id}"
+                f"JARVIS: token budget exceeded (~{est} > {input_token_limit}) on run {run.run_id}"
             )
             break
 
-        log.info("agent.iter.start", extra={
-            "run_id": run.run_id, "iteration": run.iterations,
-            "estimated_input_tokens": est,
-        })
+        log.info(
+            "agent.iter.start",
+            extra={
+                "run_id": run.run_id,
+                "iteration": run.iterations,
+                "estimated_input_tokens": est,
+            },
+        )
 
         # Observability: open an LLM span+event around the retried call.
         try:
             from observability import tracing as _otrace
+
             _llm_ctx = _otrace.instrument_llm_call(
                 model=model,
                 run_id=run.run_id,
@@ -1031,9 +1161,11 @@ async def run_jarvis_core(
             )
         except Exception:
             import contextlib as _ctx
+
             @_ctx.contextmanager
             def _noop_llm():
                 yield {}
+
             _llm_ctx = _noop_llm()
 
         try:
@@ -1050,13 +1182,12 @@ async def run_jarvis_core(
                 try:
                     usage = getattr(response, "usage", None)
                     if usage is not None:
-                        _llm_record["input_tokens"] = getattr(
-                            usage, "input_tokens", None)
-                        _llm_record["output_tokens"] = getattr(
-                            usage, "output_tokens", None)
+                        _llm_record["input_tokens"] = getattr(usage, "input_tokens", None)
+                        _llm_record["output_tokens"] = getattr(usage, "output_tokens", None)
                         # Collect metrics
                         try:
                             from core.metrics import get_metrics
+
                             metrics = get_metrics()
                             metrics.llm_requests_total.inc()
                             input_tok = getattr(usage, "input_tokens", 0)
@@ -1069,14 +1200,19 @@ async def run_jarvis_core(
             run.breaker.record_success()
         except Exception as e:
             run.breaker.record_failure()
-            log.error("agent.iter.fail", extra={
-                "run_id": run.run_id, "iteration": run.iterations,
-                "consecutive_failures": run.breaker.consecutive_failures,
-                "exc": repr(e),
-            })
+            log.error(
+                "agent.iter.fail",
+                extra={
+                    "run_id": run.run_id,
+                    "iteration": run.iterations,
+                    "consecutive_failures": run.breaker.consecutive_failures,
+                    "exc": repr(e),
+                },
+            )
             # Collect error metrics
             try:
                 from core.metrics import get_metrics
+
                 metrics = get_metrics()
                 metrics.llm_errors_total.inc()
                 metrics.record_error()
@@ -1086,6 +1222,7 @@ async def run_jarvis_core(
                 # Record circuit breaker trip
                 try:
                     from core.metrics import get_metrics
+
                     get_metrics().circuit_breaker_trips.inc()
                 except Exception:
                     pass
@@ -1114,29 +1251,34 @@ async def run_jarvis_core(
                 assistant_blocks_for_message.append({"type": "text", "text": text or ""})
             elif btype == "tool_use":
                 tool_use_blocks.append(block)
-                assistant_blocks_for_message.append({
-                    "type": "tool_use",
-                    "id": _attr_or_dict(block, "id"),
-                    "name": _attr_or_dict(block, "name"),
-                    "input": _attr_or_dict(block, "input", {}),
-                })
+                assistant_blocks_for_message.append(
+                    {
+                        "type": "tool_use",
+                        "id": _attr_or_dict(block, "id"),
+                        "name": _attr_or_dict(block, "name"),
+                        "input": _attr_or_dict(block, "input", {}),
+                    }
+                )
             else:
                 assistant_blocks_for_message.append(
                     block if isinstance(block, dict) else {"type": str(btype)}
                 )
 
         messages.append({"role": "assistant", "content": assistant_blocks_for_message})
-        run.transcript.append({"role": "assistant",
-                               "content": assistant_blocks_for_message})
+        run.transcript.append({"role": "assistant", "content": assistant_blocks_for_message})
 
         stop_reason = getattr(response, "stop_reason", None)
         if stop_reason != "tool_use" or not tool_use_blocks:
             run.stopped_reason = f"stop_reason={stop_reason}"
             run.final_message = "".join(text_chunks).strip() or None
-            log.info("agent.run.done", extra={
-                "run_id": run.run_id, "iterations": run.iterations,
-                "stop_reason": stop_reason,
-            })
+            log.info(
+                "agent.run.done",
+                extra={
+                    "run_id": run.run_id,
+                    "iterations": run.iterations,
+                    "stop_reason": stop_reason,
+                },
+            )
             break
 
         # Run all requested tools, append results.
@@ -1148,20 +1290,25 @@ async def run_jarvis_core(
             try:
                 result = await execute_mcp_tool(tu_name, tu_input)
                 run.breaker.record_success()
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu_id,
-                    "content": result if isinstance(result, str)
-                               else json.dumps(result, ensure_ascii=False),
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tu_id,
+                        "content": result
+                        if isinstance(result, str)
+                        else json.dumps(result, ensure_ascii=False),
+                    }
+                )
             except Exception as e:
                 run.breaker.record_failure()
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu_id,
-                    "is_error": True,
-                    "content": f"error: {e!r}",
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tu_id,
+                        "is_error": True,
+                        "content": f"error: {e!r}",
+                    }
+                )
                 if run.breaker.tripped:
                     run.stopped_reason = "circuit_breaker_tripped"
                     timeout = os.environ.get("JARVIS_API_TIMEOUT", "300.0")
@@ -1183,9 +1330,13 @@ async def run_jarvis_core(
 
     if not run.stopped_reason:
         run.stopped_reason = "max_iterations"
-        log.warning("agent.run.max_iterations", extra={
-            "run_id": run.run_id, "iterations": run.iterations,
-        })
+        log.warning(
+            "agent.run.max_iterations",
+            extra={
+                "run_id": run.run_id,
+                "iterations": run.iterations,
+            },
+        )
 
     return run
 
@@ -1195,17 +1346,24 @@ async def run_jarvis_core(
 
 def main() -> None:  # pragma: no cover - CLI shim
     import sys
+
     if len(sys.argv) < 2:
         print("usage: python -m core.agent '<prompt>'", file=sys.stderr)
         sys.exit(2)
     prompt = sys.argv[1]
     run = asyncio.run(run_jarvis_core(prompt))
-    print(json.dumps({
-        "run_id": run.run_id,
-        "iterations": run.iterations,
-        "stopped_reason": run.stopped_reason,
-        "final_message": run.final_message,
-    }, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "run_id": run.run_id,
+                "iterations": run.iterations,
+                "stopped_reason": run.stopped_reason,
+                "final_message": run.final_message,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

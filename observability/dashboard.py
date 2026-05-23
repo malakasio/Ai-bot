@@ -83,9 +83,9 @@ _HTML_INDEX = """<!doctype html>
 # ─── File tailing ─────────────────────────────────────────────────────────
 
 
-async def _tail_lines(path: Path,
-                      *, poll_s: float = 0.5,
-                      from_end: bool = True) -> AsyncIterator[str]:
+async def _tail_lines(
+    path: Path, *, poll_s: float = 0.5, from_end: bool = True
+) -> AsyncIterator[str]:
     """Yield new lines appended to ``path``. Re-opens after rotation."""
     # Wait for the file to exist.
     while not path.exists():
@@ -141,27 +141,27 @@ def create_app() -> Any:
         from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
         from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
     except ImportError as e:
-        raise RuntimeError(
-            "fastapi not installed; pip install fastapi uvicorn") from e
+        raise RuntimeError("fastapi not installed; pip install fastapi uvicorn") from e
 
     app = FastAPI(title="JARVIS observability dashboard", version="7.0")
     started_at = time.time()
 
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
-        return JSONResponse({
-            "ok": True,
-            "uptime_s": int(time.time() - started_at),
-            "trace_path": str(tracing.trace_path()),
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "uptime_s": int(time.time() - started_at),
+                "trace_path": str(tracing.trace_path()),
+            }
+        )
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
         return HTMLResponse(_HTML_INDEX)
 
     @app.get("/trace/tail")
-    async def trace_tail(n: int = Query(default=200, ge=1, le=10000)
-                         ) -> JSONResponse:
+    async def trace_tail(n: int = Query(default=200, ge=1, le=10000)) -> JSONResponse:
         lines = _read_tail(tracing.trace_path(), n)
         out: list[dict[str, Any]] = []
         for line in lines:
@@ -207,6 +207,7 @@ def create_app() -> Any:
     ) -> JSONResponse:
         try:
             from core import database
+
             await tracing.ensure_metrics_schema()
             clauses = []
             args: list[Any] = []
@@ -232,13 +233,13 @@ def create_app() -> Any:
             )
             return JSONResponse({"rows": [dict(r) for r in rows]})
         except Exception as e:
-            return JSONResponse(
-                {"rows": [], "error": repr(e)}, status_code=503)
+            return JSONResponse({"rows": [], "error": repr(e)}, status_code=503)
 
     @app.get("/metrics/summary")
     async def metrics_summary() -> JSONResponse:
         try:
             from core import database
+
             await tracing.ensure_metrics_schema()
             stats = await database.fetchrow(
                 """
@@ -265,18 +266,18 @@ def create_app() -> Any:
 
 def main() -> None:  # pragma: no cover
     import argparse
+
     parser = argparse.ArgumentParser(prog="observability.dashboard")
-    parser.add_argument("--host", default=os.environ.get(
-        "OBS_DASHBOARD_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get(
-        "OBS_DASHBOARD_PORT", "8090")))
+    parser.add_argument("--host", default=os.environ.get("OBS_DASHBOARD_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port", type=int, default=int(os.environ.get("OBS_DASHBOARD_PORT", "8090"))
+    )
     args = parser.parse_args()
     try:
         import uvicorn
     except ImportError:
         raise SystemExit("pip install fastapi uvicorn")
-    uvicorn.run(create_app(), host=args.host, port=args.port,
-                log_level="info")
+    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
 
 
 if __name__ == "__main__":  # pragma: no cover

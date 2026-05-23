@@ -12,6 +12,7 @@ Features:
 - CPU-bound work offloaded to ThreadPoolExecutor
 - Supports: sentence-transformers, ollama, openai, jina providers
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -36,6 +37,7 @@ def _load_model():
 
     if provider == "sentence-transformers":
         from sentence_transformers import SentenceTransformer
+
         model_name = os.environ.get("JARVIS_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
         _model = SentenceTransformer(model_name)
         _embed_dim = int(os.environ.get("JARVIS_EMBEDDING_DIM", "384"))
@@ -44,6 +46,7 @@ def _load_model():
 
     elif provider == "ollama":
         import httpx
+
         ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         model_name = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
         _model = model_name
@@ -59,6 +62,7 @@ def _load_model():
 
     elif provider == "openai":
         import openai
+
         api_key = os.environ.get("OPENAI_API_KEY", "")
         _model = openai.OpenAI(api_key=api_key)
         _model_name = "text-embedding-3-small"
@@ -96,6 +100,7 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
 
     elif provider == "ollama":
         import httpx
+
         ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         results = []
         for text in texts:
@@ -113,6 +118,7 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
 
     elif provider == "jina":
         import httpx
+
         api_key = _model
         resp = httpx.post(
             "https://api.jina.ai/v1/embeddings",

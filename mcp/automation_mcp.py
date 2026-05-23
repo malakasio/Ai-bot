@@ -13,7 +13,6 @@ Credentials are sourced from env:
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 from typing import Any, Optional
@@ -23,7 +22,6 @@ from ._common import (
     err,
     ok,
     require,
-    require_dict,
     require_int,
     require_str,
     safe_truncate,
@@ -36,20 +34,21 @@ server = Server(name="automation")
 # ─── Shared HTTP helper ───────────────────────────────────────────────────
 
 
-async def _http_request(method: str, url: str, *,
-                        headers: Optional[dict[str, str]] = None,
-                        json_body: Optional[dict[str, Any]] = None,
-                        timeout: float = 30.0) -> dict[str, Any]:
+async def _http_request(
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    json_body: Optional[dict[str, Any]] = None,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
     try:
         import httpx
     except ImportError:
-        return err("httpx not installed; pip install httpx",
-                   code="missing_dep")
+        return err("httpx not installed; pip install httpx", code="missing_dep")
     try:
-        async with httpx.AsyncClient(timeout=timeout,
-                                     follow_redirects=True) as c:
-            resp = await c.request(method, url,
-                                   headers=headers or {}, json=json_body)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
+            resp = await c.request(method, url, headers=headers or {}, json=json_body)
         body = resp.text
         return {
             "status": resp.status_code,
@@ -104,14 +103,17 @@ async def n8n_trigger(args: dict[str, Any]) -> dict[str, Any]:
         headers["Authorization"] = auth
 
     url = f"{base}/{path.lstrip('/')}"
-    resp = await _http_request(method, url, headers=headers,
-                               json_body=payload if method == "POST" else None,
-                               timeout=timeout)
+    resp = await _http_request(
+        method,
+        url,
+        headers=headers,
+        json_body=payload if method == "POST" else None,
+        timeout=timeout,
+    )
     if "_error" in resp:
         return err(f"n8n request failed: {resp['_error']}", code="http_error")
     if not (200 <= resp["status"] < 300):
-        return err(f"n8n returned HTTP {resp['status']}",
-                   code="http_status", **resp)
+        return err(f"n8n returned HTTP {resp['status']}", code="http_status", **resp)
     return ok(resp)
 
 
@@ -165,12 +167,10 @@ async def apify_run_actor(args: dict[str, Any]) -> dict[str, Any]:
     actor_input = args.get("input") or {}
     require(isinstance(actor_input, dict), "input must be an object")
     wait = bool(args.get("wait", False))
-    wait_timeout = require_int(int(args.get("wait_timeout_s", 120)),
-                               "wait_timeout_s", lo=1, hi=600)
+    wait_timeout = require_int(int(args.get("wait_timeout_s", 120)), "wait_timeout_s", lo=1, hi=600)
     memory_mb = args.get("memory_mb")
     if memory_mb is not None:
-        memory_mb = require_int(int(memory_mb), "memory_mb",
-                                lo=128, hi=16384)
+        memory_mb = require_int(int(memory_mb), "memory_mb", lo=128, hi=16384)
 
     base = _apify_base()
     params = []
@@ -181,18 +181,20 @@ async def apify_run_actor(args: dict[str, Any]) -> dict[str, Any]:
     qs = ("?" + "&".join(params)) if params else ""
     url = f"{base}/acts/{actor_id_url}/runs{qs}"
 
-    resp = await _http_request("POST", url,
-                               headers=_apify_headers(),
-                               json_body=actor_input,
-                               timeout=float(wait_timeout + 5))
+    resp = await _http_request(
+        "POST",
+        url,
+        headers=_apify_headers(),
+        json_body=actor_input,
+        timeout=float(wait_timeout + 5),
+    )
     if "_error" in resp:
-        return err(f"apify request failed: {resp['_error']}",
-                   code="http_error")
+        return err(f"apify request failed: {resp['_error']}", code="http_error")
     if not (200 <= resp["status"] < 300):
-        return err(f"apify returned HTTP {resp['status']}",
-                   code="http_status", **resp)
+        return err(f"apify returned HTTP {resp['status']}", code="http_status", **resp)
     # The Apify API returns {"data": {...run...}} on success.
     import json as _json
+
     try:
         body = _json.loads(resp["body"])
     except Exception:
@@ -216,31 +218,33 @@ async def apify_run_actor(args: dict[str, Any]) -> dict[str, Any]:
 async def apify_get_dataset(args: dict[str, Any]) -> dict[str, Any]:
     if not _apify_token():
         return err("APIFY_TOKEN not set", code="missing_config")
-    dataset_id = require_str(args["dataset_id"], "dataset_id", max_len=64,
-                             pattern=r"[A-Za-z0-9_\-]+")
+    dataset_id = require_str(
+        args["dataset_id"], "dataset_id", max_len=64, pattern=r"[A-Za-z0-9_\-]+"
+    )
     limit = require_int(int(args.get("limit", 100)), "limit", lo=1, hi=1000)
     offset = require_int(int(args.get("offset", 0)), "offset", lo=0, hi=10_000_000)
     base = _apify_base()
     url = f"{base}/datasets/{dataset_id}/items?limit={limit}&offset={offset}&format=json"
-    resp = await _http_request("GET", url, headers=_apify_headers(),
-                               timeout=30.0)
+    resp = await _http_request("GET", url, headers=_apify_headers(), timeout=30.0)
     if "_error" in resp:
-        return err(f"apify request failed: {resp['_error']}",
-                   code="http_error")
+        return err(f"apify request failed: {resp['_error']}", code="http_error")
     if not (200 <= resp["status"] < 300):
-        return err(f"apify returned HTTP {resp['status']}",
-                   code="http_status", **resp)
+        return err(f"apify returned HTTP {resp['status']}", code="http_status", **resp)
     import json as _json
+
     try:
         items = _json.loads(resp["body"])
     except Exception:
         items = []
-    return ok({
-        "dataset_id": dataset_id,
-        "limit": limit, "offset": offset,
-        "count": len(items) if isinstance(items, list) else 0,
-        "items": items,
-    })
+    return ok(
+        {
+            "dataset_id": dataset_id,
+            "limit": limit,
+            "offset": offset,
+            "count": len(items) if isinstance(items, list) else 0,
+            "items": items,
+        }
+    )
 
 
 # ─── Module entry ─────────────────────────────────────────────────────────

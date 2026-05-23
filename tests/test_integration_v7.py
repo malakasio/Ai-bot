@@ -41,22 +41,26 @@ os.environ.setdefault("JARVIS_SENTINEL_INTEGRITY_INTERVAL_S", "3600")
 class TestImports:
     def test_core_agent_imports(self):
         from core import agent
+
         assert hasattr(agent, "run_jarvis_core")
         assert hasattr(agent, "register_mcp_tool")
         assert hasattr(agent, "DESTRUCTIVE_TOOLS")
 
     def test_core_sentinel_imports(self):
         from core import sentinel
+
         assert hasattr(sentinel, "RedZoneSentinel")
         assert hasattr(sentinel, "SentinelConfig")
 
     def test_core_kairos_imports(self):
         from core import kairos
+
         assert hasattr(kairos, "Kairos")
         assert hasattr(kairos, "auto_dream")
 
     def test_mcp_router_imports(self):
         from mcp import router
+
         assert hasattr(router, "get_router")
         assert hasattr(router, "dispatch")
 
@@ -64,11 +68,13 @@ class TestImports:
         # Voice modules are import-safe even when API keys / websockets
         # aren't configured; PipelineError only surfaces on instantiation.
         from voice import pipeline, websocket_server
+
         assert hasattr(pipeline, "VoicePipeline")
         assert hasattr(websocket_server, "create_app")
 
     def test_observability_imports(self):
         from observability import dashboard, tracing
+
         assert hasattr(dashboard, "create_app")
         assert hasattr(tracing, "trace_path") or hasattr(tracing, "TRACE_LOG_PATH")
 
@@ -79,6 +85,7 @@ class TestImports:
 class TestMCPRouter:
     def test_router_loads(self):
         from mcp.router import get_router
+
         router = get_router()
         servers = list(router.servers.keys())
         # config/mcp_config.json enables filesystem, network, automation.
@@ -88,6 +95,7 @@ class TestMCPRouter:
 
     def test_tools_listable(self):
         from mcp.router import get_router
+
         tools = get_router().list_tools()
         assert len(tools) > 0
         names = {t["qualified"] for t in tools}
@@ -101,6 +109,7 @@ class TestMainApp:
     def test_create_app_succeeds(self):
         # Importing main builds the FastAPI app at module load.
         import main
+
         assert main.app is not None
         # Routes we promised in the docstring.
         routes = {getattr(r, "path", None) for r in main.app.routes}
@@ -117,6 +126,7 @@ class TestMainApp:
         # Importing main runs MCP -> agent registration.
         import main  # noqa: F401
         from core.agent import _MCP_TOOLS
+
         # After app boot _register_mcp_tools_into_agent is called from
         # lifespan, but we also call it directly here so the test doesn't
         # require running the lifespan.
@@ -131,6 +141,7 @@ class TestMainApp:
 class TestSentinelSmoke:
     def test_config_dry_run(self):
         from core.sentinel import SentinelConfig
+
         cfg = SentinelConfig()
         # Env we set above honored
         assert cfg.dry_run is True
@@ -138,10 +149,13 @@ class TestSentinelSmoke:
     @pytest.mark.asyncio
     async def test_trigger_lockdown_dry_run(self):
         from core.sentinel import RedZoneSentinel, SentinelConfig
+
         cfg = SentinelConfig()
         s = RedZoneSentinel(cfg)
         report = await s.trigger_lockdown(
-            ip="192.0.2.1", reason="unit-test", evidence="synthetic",
+            ip="192.0.2.1",
+            reason="unit-test",
+            evidence="synthetic",
         )
         assert report["dry_run"] is True
         # block_ip / snapshot / restart_services should all skip in dry-run.
@@ -155,6 +169,7 @@ class TestKairosSmoke:
     @pytest.mark.asyncio
     async def test_dry_run_tick(self):
         from core.kairos import Kairos, KairosConfig
+
         cfg = KairosConfig()
         cfg.dry_run = True
         cfg.task_batch = 1
@@ -177,6 +192,7 @@ class TestLoggerExtraCollision:
 
     def test_reserved_keys_do_not_crash(self):
         from core.agent import get_logger
+
         log = get_logger()
         # Every reserved LogRecord attribute name passed via extra.
         # Without the fix the first call raises KeyError.
@@ -189,7 +205,7 @@ class TestLoggerExtraCollision:
             "level": "INFO",
             "thread": 42,
         }
-        log.info("kairos.start", extra=bad)   # must not raise
+        log.info("kairos.start", extra=bad)  # must not raise
         log.warning("ping", extra={"name": "sentinel", "ip": "192.0.2.1"})
 
     def test_kairos_start_log_does_not_raise(self):
@@ -200,6 +216,7 @@ class TestLoggerExtraCollision:
         import dataclasses
         from core.kairos import KairosConfig
         from core.agent import get_logger
+
         cfg = KairosConfig()
         log = get_logger()
         log.info("kairos.start", extra=dataclasses.asdict(cfg))
@@ -216,6 +233,7 @@ class TestHealthz:
         except Exception:
             pytest.skip("fastapi[testclient] not installed")
         import main
+
         with TestClient(main.app) as client:
             resp = client.get("/healthz")
             assert resp.status_code == 200
@@ -235,6 +253,7 @@ class TestHealthz:
         except Exception:
             pytest.skip("fastapi[testclient] not installed")
         import main
+
         with TestClient(main.app) as client:
             r1 = client.get("/health")
             r2 = client.get("/healthz")
@@ -249,6 +268,7 @@ class TestHealthz:
         except Exception:
             pytest.skip("fastapi[testclient] not installed")
         import main
+
         with TestClient(main.app) as client:
             resp = client.get("/mcp/tools")
             assert resp.status_code == 200

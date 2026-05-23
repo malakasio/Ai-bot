@@ -83,8 +83,7 @@ def _logger() -> logging.Logger:
     log = logging.getLogger("jarvis.main")
     if not log.handlers:
         h = logging.StreamHandler(sys.stderr)
-        h.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
         log.addHandler(h)
         log.setLevel(logging.INFO)
         log.propagate = False
@@ -97,9 +96,9 @@ def _logger() -> logging.Logger:
 class _Supervisor:
     """Run an awaitable coroutine factory with auto-restart on crash."""
 
-    def __init__(self, name: str, factory, *,
-                 backoff_min_s: float = 2.0,
-                 backoff_max_s: float = 60.0):
+    def __init__(
+        self, name: str, factory, *, backoff_min_s: float = 2.0, backoff_max_s: float = 60.0
+    ):
         self.name = name
         self.factory = factory
         self.backoff_min_s = backoff_min_s
@@ -125,8 +124,12 @@ class _Supervisor:
             except Exception as e:  # noqa: BLE001
                 self.last_error = repr(e)
                 self.restart_count += 1
-                log.exception("daemon.%s.crash (restart=%d, backoff=%.1fs)",
-                              self.name, self.restart_count, backoff)
+                log.exception(
+                    "daemon.%s.crash (restart=%d, backoff=%.1fs)",
+                    self.name,
+                    self.restart_count,
+                    backoff,
+                )
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=backoff)
                     return
@@ -214,12 +217,14 @@ def _register_mcp_tools_into_agent() -> tuple[int, list[str]]:
 
 async def _run_sentinel() -> None:
     from core.sentinel import RedZoneSentinel
+
     sentinel = RedZoneSentinel()
     await sentinel.start()
 
 
 async def _run_kairos() -> None:
     from core.kairos import Kairos
+
     kairos = Kairos()
     await kairos.start()
 
@@ -230,6 +235,7 @@ async def _run_telegram() -> None:
     as a normal shutdown and won't restart-loop.
     """
     from core.telegram_bot import start_telegram_bot
+
     await start_telegram_bot()
 
 
@@ -241,8 +247,7 @@ def create_app() -> Any:
         from fastapi import FastAPI, HTTPException
         from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     except ImportError as e:
-        raise RuntimeError(
-            "fastapi not installed; pip install fastapi uvicorn") from e
+        raise RuntimeError("fastapi not installed; pip install fastapi uvicorn") from e
 
     log = _logger()
 
@@ -255,6 +260,7 @@ def create_app() -> Any:
         # 0) Init PostgreSQL connection pool (asyncpg).
         try:
             from core import database as _db
+
             await _db.init()
             log.info("lifespan.db_pool_ready")
         except Exception as e:
@@ -294,6 +300,7 @@ def create_app() -> Any:
         if os.environ.get("VOICE_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
             try:
                 from voice.websocket_server import create_app as _voice_app
+
                 app.mount("/voice", _voice_app())
                 log.info("mount.voice ok")
             except Exception as e:  # noqa: BLE001
@@ -303,6 +310,7 @@ def create_app() -> Any:
         if os.environ.get("OBS_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
             try:
                 from observability.dashboard import create_app as _obs_app
+
                 app.mount("/obs", _obs_app())
                 log.info("mount.obs ok")
             except Exception as e:  # noqa: BLE001
@@ -328,6 +336,7 @@ def create_app() -> Any:
         if os.environ.get("TELEGRAM_ENABLED", "true").lower() not in {"0", "false", "no", "off"}:
             try:
                 from core.telegram_bot import is_enabled as _tg_enabled
+
                 _tg_configured = _tg_enabled()
             except Exception as e:  # noqa: BLE001
                 STATE.mount_errors.append(f"telegram_bot import: {e!r}")
@@ -337,8 +346,10 @@ def create_app() -> Any:
                 STATE.supervisors["telegram"] = sup
                 sup.start()
             else:
-                log.info("telegram bot not configured "
-                         "(set TELEGRAM_BOT_TOKEN and TELEGRAM_USER_ID to enable)")
+                log.info(
+                    "telegram bot not configured "
+                    "(set TELEGRAM_BOT_TOKEN and TELEGRAM_USER_ID to enable)"
+                )
 
         STATE.lifespan_complete = True
         log.info("lifespan.ready: port bound, daemons supervised")
@@ -350,6 +361,7 @@ def create_app() -> Any:
             # Close DB pool before shutting down daemons.
             try:
                 from core import database as _db
+
                 await _db.close()
                 log.info("lifespan.db_pool_closed")
             except Exception as e:
@@ -414,6 +426,7 @@ def create_app() -> Any:
         """Prometheus metrics endpoint."""
         try:
             from core.metrics import get_metrics
+
             return get_metrics().export_prometheus()
         except Exception as e:
             return f"# Error exporting metrics: {e!r}\n"
@@ -429,6 +442,7 @@ def create_app() -> Any:
         db_status = "skipped"
         try:
             from core import database as _db
+
             try:
                 await _db.fetchval("SELECT 1")
                 db_status = "ok"
@@ -459,8 +473,8 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
 <h1>JARVIS v7.0</h1>
 <p>uptime: {int(time.time() - STATE.started_at) if STATE.started_at else 0}s ·
    mcp tools: {STATE.mcp_tools_count} ·
-   lifespan: {'ready' if STATE.lifespan_complete else 'warming'}</p>
-<h2>daemons</h2><ul>{''.join(rows) or '<li>(none)</li>'}</ul>
+   lifespan: {"ready" if STATE.lifespan_complete else "warming"}</p>
+<h2>daemons</h2><ul>{"".join(rows) or "<li>(none)</li>"}</ul>
 <h2>endpoints</h2>
 <ul>
   <li><a href="/healthz">/healthz</a> &middot; <a href="/health">/health</a> &middot; <a href="/ping">/ping</a> &middot; <a href="/readyz">/readyz</a></li>
@@ -485,14 +499,15 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
             raise HTTPException(503, f"agent unavailable: {e!r}")
         try:
             from mcp.router import get_router
+
             mcp_tools = [
                 {
                     "name": t["qualified"],
                     "description": t.get("description", ""),
-                    "input_schema": t.get("input_schema",
-                                          {"type": "object",
-                                           "properties": {},
-                                           "additionalProperties": True}),
+                    "input_schema": t.get(
+                        "input_schema",
+                        {"type": "object", "properties": {}, "additionalProperties": True},
+                    ),
                 }
                 for t in get_router().list_tools()
             ]
@@ -503,6 +518,7 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
         context = ""
         try:
             from core.memory import recent_episodes, semantic_episodes
+
             episodes = await recent_episodes(limit=10)
 
             # Feature flag: add semantic retrieval
@@ -511,15 +527,14 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
                     # Extract query from user prompt
                     if prompt:
                         semantic_eps = await semantic_episodes(
-                            query=prompt,
-                            limit=5,
-                            min_confidence=0.7
+                            query=prompt, limit=5, min_confidence=0.7
                         )
                         # Merge: temporal (10) + semantic (up to 5)
                         episodes = episodes + semantic_eps
                 except Exception as e:
                     # Semantic search failed, continue with temporal only
                     import sys
+
                     print(f"[main] Semantic retrieval failed: {e}", file=sys.stderr)
 
             if episodes:
@@ -528,18 +543,13 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
                     f"{ep.get('input', ep.get('subject', ''))} -> {ep.get('output', ep.get('content', ''))}"
                     for ep in episodes
                 ]
-                context = (
-                    "Recent conversation history (last 10 episodes):\n"
-                    + "\n".join(lines)
-                )
+                context = "Recent conversation history (last 10 episodes):\n" + "\n".join(lines)
         except Exception:
             pass  # memory store unavailable — proceed without context
 
         system_prompt = payload.get("system")
         if context:
-            system_prompt = (
-                f"{context}\n\n{system_prompt or ''}"
-            ).strip()
+            system_prompt = (f"{context}\n\n{system_prompt or ''}").strip()
 
         run = await run_jarvis_core(
             prompt,
@@ -551,17 +561,20 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
         # ── Store this episode ──────────────────────────────────────────
         try:
             from core.memory import Episode as _Ep, store_episode
-            await store_episode(_Ep(
-                actor="user",
-                tool="agent/run",
-                input=prompt[:1024],
-                output=(run.final_message or "")[:2048],
-                metadata={
-                    "run_id": run.run_id,
-                    "iterations": run.iterations,
-                    "stopped_reason": run.stopped_reason,
-                },
-            ))
+
+            await store_episode(
+                _Ep(
+                    actor="user",
+                    tool="agent/run",
+                    input=prompt[:1024],
+                    output=(run.final_message or "")[:2048],
+                    metadata={
+                        "run_id": run.run_id,
+                        "iterations": run.iterations,
+                        "stopped_reason": run.stopped_reason,
+                    },
+                )
+            )
         except Exception:
             pass  # memory store unavailable — non-fatal
 
@@ -578,6 +591,7 @@ a{{color:#6cf}} h1{{color:#6cf}}</style></head><body>
     async def mcp_tools() -> dict[str, Any]:
         try:
             from mcp.router import get_router
+
             return {"tools": get_router().list_tools()}
         except Exception as e:
             raise HTTPException(503, f"mcp unavailable: {e!r}")
@@ -615,8 +629,13 @@ def main() -> None:  # pragma: no cover
         raise SystemExit("pip install fastapi uvicorn")
     host = os.environ.get("JARVIS_HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", os.environ.get("JARVIS_PORT", "8000")))
-    uvicorn.run("main:app", host=host, port=port, log_level="info",
-                reload=os.environ.get("JARVIS_DEV_RELOAD") == "1")
+    uvicorn.run(
+        "main:app",
+        host=host,
+        port=port,
+        log_level="info",
+        reload=os.environ.get("JARVIS_DEV_RELOAD") == "1",
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

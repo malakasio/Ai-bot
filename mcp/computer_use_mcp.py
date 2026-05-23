@@ -25,21 +25,24 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
-import re
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeout
+from playwright.async_api import (
+    async_playwright,
+    Browser,
+    BrowserContext,
+    Page,
+    TimeoutError as PlaywrightTimeout,
+)
 from playwright_stealth import stealth_async
 
 from ._common import (
     Server,
     err,
     ok,
-    require,
     require_str,
     require_in,
-    safe_truncate,
 )
 
 
@@ -60,14 +63,13 @@ def _allowlist() -> list[str]:
 
 
 def _allow_private() -> bool:
-    return os.environ.get("JARVIS_NET_ALLOW_PRIVATE", "false").lower() in {
-        "1", "true", "yes", "on"
-    }
+    return os.environ.get("JARVIS_NET_ALLOW_PRIVATE", "false").lower() in {"1", "true", "yes", "on"}
 
 
 def _is_private_or_loopback(host: str) -> bool:
     import ipaddress
     import socket
+
     try:
         ip = ipaddress.ip_address(host)
         return ip.is_private or ip.is_loopback or ip.is_link_local
@@ -214,12 +216,14 @@ async def browser_navigate(args: dict[str, Any]) -> dict[str, Any]:
         # YouTube and modern SPAs need extra time beyond networkidle
         await asyncio.sleep(3.0)
 
-        return ok({
-            "url": page.url,
-            "status": response.status,
-            "title": await page.title(),
-            "final_url": page.url,  # After redirects
-        })
+        return ok(
+            {
+                "url": page.url,
+                "status": response.status,
+                "title": await page.title(),
+                "final_url": page.url,  # After redirects
+            }
+        )
     except PlaywrightTimeout:
         return err("navigation timeout (30s)", code="timeout")
     except Exception as e:
@@ -342,12 +346,14 @@ async def browser_screenshot(args: dict[str, Any]) -> dict[str, Any]:
             screenshot_bytes = await page.screenshot(full_page=full_page, timeout=30000)
 
         b64 = base64.b64encode(screenshot_bytes).decode("ascii")
-        return ok({
-            "screenshot_base64": b64,
-            "size_bytes": len(screenshot_bytes),
-            "selector": selector,
-            "full_page": full_page,
-        })
+        return ok(
+            {
+                "screenshot_base64": b64,
+                "size_bytes": len(screenshot_bytes),
+                "selector": selector,
+                "full_page": full_page,
+            }
+        )
     except PlaywrightTimeout:
         return err("screenshot timeout (30s)", code="timeout")
     except Exception as e:

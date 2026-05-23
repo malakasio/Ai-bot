@@ -23,6 +23,7 @@ Integration points:
 - godmode/reporting/telegram_bot.py: User notifications
 - core/database.py: PostgreSQL persistence
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,13 +38,14 @@ from uuid import UUID
 
 from core import database
 from godmode.isolation import WorktreeManager, Worktree
-from godmode.validation.pipeline import ValidationPipeline, ValidationResult
+from godmode.validation.pipeline import ValidationPipeline
 from godmode.reporting.telegram_bot import get_reporter
 
 
 @dataclass
 class TaskExecution:
     """Represents a running God Mode task."""
+
     task_id: UUID
     worktree: Worktree
     agent_id: str
@@ -99,6 +101,7 @@ class GodModeOrchestrator:
         """
         # Generate unique agent ID
         import socket
+
         agent_id = f"godmode-{socket.gethostname()}-{os.getpid()}"
 
         row = await database.fetchrow(
@@ -121,8 +124,8 @@ class GodModeOrchestrator:
             RETURNING id, title, description, plan, priority,
                       current_phase, total_phases, validation_attempts,
                       max_validation_attempts, retry_count, max_retries
-            """
-            , agent_id
+            """,
+            agent_id,
         )
 
         if not row:
@@ -136,7 +139,7 @@ class GodModeOrchestrator:
             """,
             row["id"],
             agent_id,
-            json.dumps({"agent_id": agent_id})
+            json.dumps({"agent_id": agent_id}),
         )
 
         return dict(row)
@@ -178,9 +181,7 @@ class GodModeOrchestrator:
         try:
             # 1. Create isolated worktree
             worktree = await self.worktree_manager.create_worktree(
-                task_id=task_id,
-                base_branch="main",
-                new_branch=f"godmode/task-{task_id}"
+                task_id=task_id, base_branch="main", new_branch=f"godmode/task-{task_id}"
             )
 
             # Update task with worktree info
@@ -196,16 +197,12 @@ class GodModeOrchestrator:
                 task_id,
                 str(worktree.path),
                 worktree.branch,
-                worktree.base_commit
+                worktree.base_commit,
             )
 
             # 2. Send task started notification
             await self.reporter.notify_task_started(
-                task_id=task_id,
-                title=title,
-                agent_id=agent_id,
-                branch=worktree.branch,
-                plan=plan
+                task_id=task_id, title=title, agent_id=agent_id, branch=worktree.branch, plan=plan
             )
 
             # 3. Execute plan phases
@@ -213,12 +210,13 @@ class GodModeOrchestrator:
             total_phases = len(phases)
 
             await database.execute(
-                "UPDATE god_mode_tasks SET total_phases = $2 WHERE id = $1",
-                task_id, total_phases
+                "UPDATE god_mode_tasks SET total_phases = $2 WHERE id = $1", task_id, total_phases
             )
 
             for phase_idx, phase in enumerate(phases):
-                print(f"[godmode] Task {task_id} - Phase {phase_idx + 1}/{total_phases}: {phase.get('name')}")
+                print(
+                    f"[godmode] Task {task_id} - Phase {phase_idx + 1}/{total_phases}: {phase.get('name')}"
+                )
 
                 # Update current phase
                 await database.execute(
@@ -231,13 +229,11 @@ class GodModeOrchestrator:
                     """,
                     task_id,
                     phase_idx,
-                    int((phase_idx / total_phases) * 100)
+                    int((phase_idx / total_phases) * 100),
                 )
 
                 # Execute phase steps
-                success = await self._execute_phase(
-                    task_id, worktree, phase_idx, phase
-                )
+                success = await self._execute_phase(task_id, worktree, phase_idx, phase)
 
                 if not success:
                     raise RuntimeError(f"Phase {phase_idx + 1} failed")
@@ -249,7 +245,7 @@ class GodModeOrchestrator:
                         title=title,
                         current_phase=phase_idx,
                         total_phases=total_phases,
-                        progress_pct=int(((phase_idx + 1) / total_phases) * 100)
+                        progress_pct=int(((phase_idx + 1) / total_phases) * 100),
                     )
 
             # 4. Get changes summary
@@ -263,7 +259,7 @@ class GodModeOrchestrator:
                 task_id=task_id,
                 files_changed=files_changed,
                 commits=commits,
-                requirements=plan.get("requirements")
+                requirements=plan.get("requirements"),
             )
 
             # Update task with validation results
@@ -278,19 +274,21 @@ class GodModeOrchestrator:
                 """,
                 task_id,
                 validation_result.score,
-                json.dumps({
-                    "score": validation_result.score,
-                    "correctness": validation_result.correctness_score,
-                    "completeness": validation_result.completeness_score,
-                    "efficiency": validation_result.efficiency_score,
-                    "safety": validation_result.safety_score,
-                    "syntax": validation_result.syntax,
-                    "tests": validation_result.tests,
-                    "security": validation_result.security,
-                    "logs": validation_result.logs,
-                    "feedback": validation_result.feedback,
-                    "timestamp": validation_result.timestamp
-                })
+                json.dumps(
+                    {
+                        "score": validation_result.score,
+                        "correctness": validation_result.correctness_score,
+                        "completeness": validation_result.completeness_score,
+                        "efficiency": validation_result.efficiency_score,
+                        "safety": validation_result.safety_score,
+                        "syntax": validation_result.syntax,
+                        "tests": validation_result.tests,
+                        "security": validation_result.security,
+                        "logs": validation_result.logs,
+                        "feedback": validation_result.feedback,
+                        "timestamp": validation_result.timestamp,
+                    }
+                ),
             )
 
             # Send validation notification
@@ -301,9 +299,9 @@ class GodModeOrchestrator:
                 validation_results={
                     "syntax": validation_result.syntax,
                     "tests": validation_result.tests,
-                    "security": validation_result.security
+                    "security": validation_result.security,
                 },
-                accepted=validation_result.passed
+                accepted=validation_result.passed,
             )
 
             # 6. Self-heal if validation failed
@@ -325,10 +323,12 @@ class GodModeOrchestrator:
                         WHERE id = $1
                         """,
                         task_id,
-                        feedback_text
+                        feedback_text,
                     )
 
-                    print(f"[godmode] Task {task_id} validation failed (score={validation_result.score}), retrying with feedback")
+                    print(
+                        f"[godmode] Task {task_id} validation failed (score={validation_result.score}), retrying with feedback"
+                    )
 
                     # Cleanup worktree for retry
                     await self.worktree_manager.cleanup_worktree(worktree, force=True)
@@ -342,9 +342,7 @@ class GodModeOrchestrator:
 
             # 7. Merge to main on success
             merge_result = await self.worktree_manager.merge_worktree(
-                worktree=worktree,
-                target_branch="main",
-                squash=False
+                worktree=worktree, target_branch="main", squash=False
             )
 
             if not merge_result["success"]:
@@ -370,7 +368,7 @@ class GodModeOrchestrator:
                 task_id,
                 duration_ms,
                 commits,
-                files_changed
+                files_changed,
             )
 
             # Log completion event
@@ -381,11 +379,13 @@ class GodModeOrchestrator:
                 """,
                 task_id,
                 agent_id,
-                json.dumps({
-                    "score": validation_result.score,
-                    "duration_ms": duration_ms,
-                    "merge_commit": merge_commit
-                })
+                json.dumps(
+                    {
+                        "score": validation_result.score,
+                        "duration_ms": duration_ms,
+                        "merge_commit": merge_commit,
+                    }
+                ),
             )
 
             # Send completion notification
@@ -399,13 +399,15 @@ class GodModeOrchestrator:
                 tests_total=tests.get("total", 0),
                 commits=commits,
                 files_changed=files_changed,
-                merge_commit=merge_commit
+                merge_commit=merge_commit,
             )
 
             # 9. Cleanup worktree
             await self.worktree_manager.cleanup_worktree(worktree, force=False)
 
-            print(f"[godmode] Task {task_id} completed successfully (score={validation_result.score})")
+            print(
+                f"[godmode] Task {task_id} completed successfully (score={validation_result.score})"
+            )
 
         except Exception as e:
             # Task failed
@@ -423,7 +425,7 @@ class GodModeOrchestrator:
                 WHERE id = $1
                 """,
                 task_id,
-                error_msg
+                error_msg,
             )
 
             # Log failure event
@@ -434,7 +436,7 @@ class GodModeOrchestrator:
                 """,
                 task_id,
                 agent_id,
-                json.dumps({"error": error_msg})
+                json.dumps({"error": error_msg}),
             )
 
             # Send failure notification
@@ -448,7 +450,7 @@ class GodModeOrchestrator:
                 attempts=attempts,
                 max_attempts=task["max_validation_attempts"],
                 error=error_msg,
-                validation_results=validation_result.__dict__ if validation_result else None
+                validation_results=validation_result.__dict__ if validation_result else None,
             )
 
             # Preserve worktree for debugging (don't cleanup on failure)
@@ -456,11 +458,7 @@ class GodModeOrchestrator:
                 print(f"[godmode] Worktree preserved for debugging: {worktree.path}")
 
     async def _execute_phase(
-        self,
-        task_id: UUID,
-        worktree: Worktree,
-        phase_idx: int,
-        phase: dict
+        self, task_id: UUID, worktree: Worktree, phase_idx: int, phase: dict
     ) -> bool:
         """
         Execute a single phase of the plan.
@@ -488,7 +486,7 @@ class GodModeOrchestrator:
                 command,
                 cwd=worktree.path,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
 
@@ -497,7 +495,7 @@ class GodModeOrchestrator:
                 print(f"[godmode]   stderr: {stderr.decode()[:500]}")
                 return False
 
-            print(f"[godmode]   Step completed successfully")
+            print("[godmode]   Step completed successfully")
 
         return True
 

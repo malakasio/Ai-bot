@@ -71,15 +71,15 @@ def _get_logger():
     # minimal stderr logger otherwise.
     try:
         from . import agent as _agent
+
         return _agent.get_logger()
     except Exception:
         import logging
+
         log = logging.getLogger("jarvis.sentinel")
         if not log.handlers:
             h = logging.StreamHandler()
-            h.setFormatter(logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-            ))
+            h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
             log.addHandler(h)
             log.setLevel(logging.INFO)
         return log
@@ -157,49 +157,40 @@ def _sha256_file(path: Path) -> Optional[str]:
 @dataclass
 class SentinelConfig:
     auth_log: Path = field(
-        default_factory=lambda: Path(os.environ.get(
-            "JARVIS_SENTINEL_AUTH_LOG", DEFAULT_AUTH_LOG))
+        default_factory=lambda: Path(os.environ.get("JARVIS_SENTINEL_AUTH_LOG", DEFAULT_AUTH_LOG))
     )
     integrity_paths: tuple[Path, ...] = field(
         default_factory=lambda: tuple(
-            Path(p) for p in _list_env(
-                "JARVIS_SENTINEL_INTEGRITY_PATHS", DEFAULT_INTEGRITY_PATHS)
+            Path(p) for p in _list_env("JARVIS_SENTINEL_INTEGRITY_PATHS", DEFAULT_INTEGRITY_PATHS)
         )
     )
     integrity_interval_s: int = field(
         default_factory=lambda: _int_env(
-            "JARVIS_SENTINEL_INTEGRITY_INTERVAL_S",
-            DEFAULT_INTEGRITY_INTERVAL_S)
+            "JARVIS_SENTINEL_INTEGRITY_INTERVAL_S", DEFAULT_INTEGRITY_INTERVAL_S
+        )
     )
     fail_threshold: int = field(
-        default_factory=lambda: _int_env(
-            "JARVIS_SENTINEL_FAIL_THRESHOLD", DEFAULT_FAIL_THRESHOLD)
+        default_factory=lambda: _int_env("JARVIS_SENTINEL_FAIL_THRESHOLD", DEFAULT_FAIL_THRESHOLD)
     )
     fail_window_s: int = field(
-        default_factory=lambda: _int_env(
-            "JARVIS_SENTINEL_FAIL_WINDOW_S", DEFAULT_FAIL_WINDOW_S)
+        default_factory=lambda: _int_env("JARVIS_SENTINEL_FAIL_WINDOW_S", DEFAULT_FAIL_WINDOW_S)
     )
     whitelist: tuple[str, ...] = field(
         default_factory=lambda: _list_env("JARVIS_SENTINEL_WHITELIST", ())
     )
     services: tuple[str, ...] = field(
-        default_factory=lambda: _list_env(
-            "JARVIS_SENTINEL_SERVICES", DEFAULT_SERVICES)
+        default_factory=lambda: _list_env("JARVIS_SENTINEL_SERVICES", DEFAULT_SERVICES)
     )
     git_dir: Path = field(
-        default_factory=lambda: Path(os.environ.get(
-            "JARVIS_SENTINEL_GIT_DIR", DEFAULT_GIT_DIR))
+        default_factory=lambda: Path(os.environ.get("JARVIS_SENTINEL_GIT_DIR", DEFAULT_GIT_DIR))
     )
-    dry_run: bool = field(
-        default_factory=lambda: _bool_env("JARVIS_SENTINEL_DRY_RUN", False)
-    )
+    dry_run: bool = field(default_factory=lambda: _bool_env("JARVIS_SENTINEL_DRY_RUN", False))
 
 
 # ─── Subprocess wrapper ──────────────────────────────────────────────────
 
 
-async def _run(cmd: list[str], *, timeout: float = 30.0
-               ) -> tuple[int, str, str]:
+async def _run(cmd: list[str], *, timeout: float = 30.0) -> tuple[int, str, str]:
     """Run a command; never raise. Returns (rc, stdout, stderr)."""
     log = _get_logger()
     try:
@@ -212,8 +203,7 @@ async def _run(cmd: list[str], *, timeout: float = 30.0
         log.warning("sentinel.cmd.missing", extra={"cmd": cmd, "exc": repr(e)})
         return 127, "", str(e)
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
         log.error("sentinel.cmd.timeout", extra={"cmd": cmd})
@@ -230,22 +220,24 @@ async def _send_telegram(text: str) -> bool:
     log = _get_logger()
     try:
         from . import agent as _agent
+
         return await _agent.send_telegram_alert(text)
     except Exception:
         pass
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = (os.environ.get("TELEGRAM_USER_ID")
-               or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    chat_id = (
+        os.environ.get("TELEGRAM_USER_ID") or os.environ.get("TELEGRAM_CHAT_ID") or ""
+    ).strip()
     if not token or not chat_id:
         log.warning("sentinel.telegram.skip", extra={"reason": "missing_creds"})
         return False
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=10.0) as c:
             resp = await c.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text,
-                      "disable_web_page_preview": True},
+                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
             )
         return resp.status_code == 200
     except Exception as e:
@@ -266,12 +258,12 @@ class _Hit:
 class RedZoneSentinel:
     """Autonomous defense daemon. Use as:
 
-        sentinel = RedZoneSentinel()
-        await sentinel.start()          # blocks forever
-        # or
-        task = asyncio.create_task(sentinel.start())
-        ...
-        await sentinel.stop()
+    sentinel = RedZoneSentinel()
+    await sentinel.start()          # blocks forever
+    # or
+    task = asyncio.create_task(sentinel.start())
+    ...
+    await sentinel.stop()
     """
 
     def __init__(self, config: Optional[SentinelConfig] = None) -> None:
@@ -283,25 +275,26 @@ class RedZoneSentinel:
         self._failures: dict[str, list[float]] = {}
         self._blocked: set[str] = set()
         self._hashes: dict[Path, Optional[str]] = {}
-        self.triggered_count = 0    # observability hook
+        self.triggered_count = 0  # observability hook
 
     # ── Public API ────────────────────────────────────────────────────
 
     async def start(self) -> None:
         """Launch both async tasks and wait until stop() is called."""
-        self.log.info("sentinel.start", extra={
-            "auth_log": str(self.cfg.auth_log),
-            "integrity_paths": [str(p) for p in self.cfg.integrity_paths],
-            "fail_threshold": self.cfg.fail_threshold,
-            "fail_window_s": self.cfg.fail_window_s,
-            "dry_run": self.cfg.dry_run,
-            "services": list(self.cfg.services),
-        })
+        self.log.info(
+            "sentinel.start",
+            extra={
+                "auth_log": str(self.cfg.auth_log),
+                "integrity_paths": [str(p) for p in self.cfg.integrity_paths],
+                "fail_threshold": self.cfg.fail_threshold,
+                "fail_window_s": self.cfg.fail_window_s,
+                "dry_run": self.cfg.dry_run,
+                "services": list(self.cfg.services),
+            },
+        )
         self._tasks = [
-            asyncio.create_task(self.monitor_ssh_logs(),
-                                name="sentinel.ssh"),
-            asyncio.create_task(self.check_file_integrity(),
-                                name="sentinel.integrity"),
+            asyncio.create_task(self.monitor_ssh_logs(), name="sentinel.ssh"),
+            asyncio.create_task(self.check_file_integrity(), name="sentinel.integrity"),
         ]
         try:
             await self._stop_event.wait()
@@ -309,8 +302,7 @@ class RedZoneSentinel:
             for t in self._tasks:
                 t.cancel()
             await asyncio.gather(*self._tasks, return_exceptions=True)
-            self.log.info("sentinel.stopped",
-                          extra={"triggered_count": self.triggered_count})
+            self.log.info("sentinel.stopped", extra={"triggered_count": self.triggered_count})
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -328,11 +320,9 @@ class RedZoneSentinel:
         while not self._stop_event.is_set():
             if path.exists():
                 break
-            log.warning("sentinel.ssh.waiting", extra={"path": str(path),
-                                                        "backoff_s": backoff})
+            log.warning("sentinel.ssh.waiting", extra={"path": str(path), "backoff_s": backoff})
             try:
-                await asyncio.wait_for(self._stop_event.wait(),
-                                       timeout=backoff)
+                await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
                 return
             except asyncio.TimeoutError:
                 backoff = min(backoff * 2, 30.0)
@@ -348,14 +338,22 @@ class RedZoneSentinel:
                         continue
                     await self._handle_auth_line(line)
         except PermissionError as e:
-            log.error("sentinel.ssh.permission", extra={
-                "path": str(path), "exc": repr(e),
-            })
+            log.error(
+                "sentinel.ssh.permission",
+                extra={
+                    "path": str(path),
+                    "exc": repr(e),
+                },
+            )
             return
         except FileNotFoundError as e:
-            log.error("sentinel.ssh.gone", extra={
-                "path": str(path), "exc": repr(e),
-            })
+            log.error(
+                "sentinel.ssh.gone",
+                extra={
+                    "path": str(path),
+                    "exc": repr(e),
+                },
+            )
             return
         except asyncio.CancelledError:
             raise
@@ -371,8 +369,7 @@ class RedZoneSentinel:
         if not _is_ip(ip):
             return
         if _ip_in_whitelist(ip, self.cfg.whitelist):
-            self.log.info("sentinel.ssh.whitelisted",
-                          extra={"ip": ip, "user": user})
+            self.log.info("sentinel.ssh.whitelisted", extra={"ip": ip, "user": user})
             return
         if ip in self._blocked:
             return
@@ -385,10 +382,15 @@ class RedZoneSentinel:
         self._failures[ip] = [t for t in bucket if t >= cutoff]
         n = len(self._failures[ip])
 
-        self.log.info("sentinel.ssh.fail", extra={
-            "ip": ip, "user": user, "count": n,
-            "threshold": self.cfg.fail_threshold,
-        })
+        self.log.info(
+            "sentinel.ssh.fail",
+            extra={
+                "ip": ip,
+                "user": user,
+                "count": n,
+                "threshold": self.cfg.fail_threshold,
+            },
+        )
 
         if n >= self.cfg.fail_threshold:
             self._blocked.add(ip)
@@ -396,7 +398,7 @@ class RedZoneSentinel:
             await self.trigger_lockdown(
                 ip=ip,
                 reason=f"SSH brute force: {n} failed attempts in "
-                       f"{self.cfg.fail_window_s}s, last user={user}",
+                f"{self.cfg.fail_window_s}s, last user={user}",
                 evidence=line.strip(),
             )
 
@@ -407,10 +409,13 @@ class RedZoneSentinel:
         # Prime the baseline.
         for p in self.cfg.integrity_paths:
             self._hashes[p] = _sha256_file(p)
-            log.info("sentinel.integrity.baseline", extra={
-                "path": str(p),
-                "sha256": self._hashes[p] or "<missing>",
-            })
+            log.info(
+                "sentinel.integrity.baseline",
+                extra={
+                    "path": str(p),
+                    "sha256": self._hashes[p] or "<missing>",
+                },
+            )
         try:
             while not self._stop_event.is_set():
                 try:
@@ -427,11 +432,14 @@ class RedZoneSentinel:
                     if current is None and prev is None:
                         continue
                     if current != prev:
-                        log.warning("sentinel.integrity.changed", extra={
-                            "path": str(p),
-                            "before": prev,
-                            "after": current,
-                        })
+                        log.warning(
+                            "sentinel.integrity.changed",
+                            extra={
+                                "path": str(p),
+                                "before": prev,
+                                "after": current,
+                            },
+                        )
                         self._hashes[p] = current
                         self.triggered_count += 1
                         await self.trigger_lockdown(
@@ -446,8 +454,7 @@ class RedZoneSentinel:
 
     # ── 3) Lockdown sequence ──────────────────────────────────────────
 
-    async def trigger_lockdown(self, *, ip: Optional[str], reason: str,
-                                evidence: str = "") -> dict:
+    async def trigger_lockdown(self, *, ip: Optional[str], reason: str, evidence: str = "") -> dict:
         """Run the full lockdown sequence. Returns a structured report.
 
         Sequence:
@@ -498,8 +505,7 @@ class RedZoneSentinel:
         # iptables
         ipt = shutil.which("iptables")
         if ipt:
-            rc, so, se = await _run(
-                [ipt, "-A", "INPUT", "-s", ip, "-j", "DROP"])
+            rc, so, se = await _run([ipt, "-A", "INPUT", "-s", ip, "-j", "DROP"])
             out["iptables"] = {"rc": rc, "err": se.strip()[:512]}
         else:
             out["iptables"] = {"skipped": "missing_binary"}
@@ -507,8 +513,7 @@ class RedZoneSentinel:
         # ufw
         ufw = shutil.which("ufw")
         if ufw:
-            rc, so, se = await _run(
-                [ufw, "insert", "1", "deny", "from", ip])
+            rc, so, se = await _run([ufw, "insert", "1", "deny", "from", ip])
             out["ufw"] = {"rc": rc, "err": se.strip()[:512]}
         else:
             out["ufw"] = {"skipped": "missing_binary"}
@@ -541,34 +546,54 @@ class RedZoneSentinel:
         # Mirror /etc into the snapshot dir. rsync if available; cp otherwise.
         rsync = shutil.which("rsync")
         if rsync:
-            rc, _, se = await _run([
-                rsync, "-a", "--delete",
-                "--exclude=/.git", "--exclude=/.gitignore",
-                "/etc/", f"{self.cfg.git_dir}/etc/",
-            ], timeout=120)
+            rc, _, se = await _run(
+                [
+                    rsync,
+                    "-a",
+                    "--delete",
+                    "--exclude=/.git",
+                    "--exclude=/.gitignore",
+                    "/etc/",
+                    f"{self.cfg.git_dir}/etc/",
+                ],
+                timeout=120,
+            )
             out["copy"] = {"tool": "rsync", "rc": rc, "err": se.strip()[:256]}
         else:
             cp = shutil.which("cp")
             if cp:
-                rc, _, se = await _run([
-                    cp, "-a", "/etc/.", f"{self.cfg.git_dir}/etc/",
-                ], timeout=120)
+                rc, _, se = await _run(
+                    [
+                        cp,
+                        "-a",
+                        "/etc/.",
+                        f"{self.cfg.git_dir}/etc/",
+                    ],
+                    timeout=120,
+                )
                 out["copy"] = {"tool": "cp", "rc": rc, "err": se.strip()[:256]}
             else:
                 out["copy"] = {"skipped": "missing_binary"}
                 return out
 
-        rc, _, se = await _run([git, "-C", str(self.cfg.git_dir),
-                                "add", "-A"])
+        rc, _, se = await _run([git, "-C", str(self.cfg.git_dir), "add", "-A"])
         out["add"] = {"rc": rc, "err": se.strip()[:256]}
-        msg = (f"snapshot: {reason} "
-               f"({time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})")
-        rc, _, se = await _run([
-            git, "-C", str(self.cfg.git_dir),
-            "-c", "user.name=jarvis-sentinel",
-            "-c", "user.email=sentinel@jarvis.local",
-            "commit", "-m", msg, "--allow-empty",
-        ])
+        msg = f"snapshot: {reason} ({time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})"
+        rc, _, se = await _run(
+            [
+                git,
+                "-C",
+                str(self.cfg.git_dir),
+                "-c",
+                "user.name=jarvis-sentinel",
+                "-c",
+                "user.email=sentinel@jarvis.local",
+                "commit",
+                "-m",
+                msg,
+                "--allow-empty",
+            ]
+        )
         out["commit"] = {"rc": rc, "err": se.strip()[:256], "msg": msg}
         return out
 
@@ -586,8 +611,7 @@ class RedZoneSentinel:
             return out
         for svc in self.cfg.services:
             rc, _, se = await _run([sctl, "restart", svc], timeout=60)
-            out["results"].append({"svc": svc, "rc": rc,
-                                    "err": se.strip()[:256]})
+            out["results"].append({"svc": svc, "rc": rc, "err": se.strip()[:256]})
         return out
 
     async def _notify(self, report: dict) -> dict:
@@ -599,16 +623,14 @@ class RedZoneSentinel:
             return f"{k}=ok"
 
         steps_summary = ", ".join(
-            _step_summary(k, v)
-            for k, v in report["steps"].items()
-            if k != "telegram"
+            _step_summary(k, v) for k, v in report["steps"].items() if k != "telegram"
         )
         lines = [
             "JARVIS Sentinel - lockdown triggered",
             f"reason: {report['reason']}",
             f"ip: {report.get('ip') or '-'}",
             f"dry_run: {report['dry_run']}",
-            f"evidence: {report.get('evidence','')[:300]}",
+            f"evidence: {report.get('evidence', '')[:300]}",
             f"steps: {steps_summary}",
         ]
         text = "\n".join(lines)
@@ -621,9 +643,11 @@ class RedZoneSentinel:
 
 def main() -> None:  # pragma: no cover - CLI shim
     import argparse
+
     parser = argparse.ArgumentParser(prog="core.sentinel")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="force dry-run (no privileged actions)")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="force dry-run (no privileged actions)"
+    )
     args = parser.parse_args()
     if args.dry_run:
         os.environ["JARVIS_SENTINEL_DRY_RUN"] = "true"

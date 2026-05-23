@@ -1,10 +1,8 @@
 """Tests for Telegram bot voice message handling."""
 
-import asyncio
 import os
 import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -14,9 +12,7 @@ def mock_deepgram_response():
     """Mock Deepgram API response."""
     mock_response = MagicMock()
     mock_response.results.channels = [
-        MagicMock(alternatives=[
-            MagicMock(transcript="This is a test transcription")
-        ])
+        MagicMock(alternatives=[MagicMock(transcript="This is a test transcription")])
     ]
     return mock_response
 
@@ -46,7 +42,9 @@ class TestVoiceTranscription:
                 with patch("deepgram.PrerecordedOptions"):
                     # Setup mock
                     mock_client = MagicMock()
-                    mock_client.listen.rest.v.return_value.transcribe_file.return_value = mock_deepgram_response
+                    mock_client.listen.rest.v.return_value.transcribe_file.return_value = (
+                        mock_deepgram_response
+                    )
                     mock_client_class.return_value = mock_client
 
                     # Import after patching
@@ -71,15 +69,15 @@ class TestVoiceTranscription:
     async def test_transcribe_voice_empty_transcript(self, sample_audio_file):
         """Test handling of empty transcript from Deepgram."""
         mock_response = MagicMock()
-        mock_response.results.channels = [
-            MagicMock(alternatives=[MagicMock(transcript="")])
-        ]
+        mock_response.results.channels = [MagicMock(alternatives=[MagicMock(transcript="")])]
 
         with patch.dict(os.environ, {"DEEPGRAM_API_KEY": "test_api_key"}):
             with patch("deepgram.DeepgramClient") as mock_client_class:
                 with patch("deepgram.PrerecordedOptions"):
                     mock_client = MagicMock()
-                    mock_client.listen.rest.v.return_value.transcribe_file.return_value = mock_response
+                    mock_client.listen.rest.v.return_value.transcribe_file.return_value = (
+                        mock_response
+                    )
                     mock_client_class.return_value = mock_client
 
                     from core.telegram_bot import _transcribe_voice

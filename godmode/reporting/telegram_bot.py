@@ -10,10 +10,10 @@ Notification Types:
 - Task completion (success/failure)
 - Manual intervention required
 """
+
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -29,7 +29,7 @@ class TelegramReporter:
     async def send_message(self, text: str, parse_mode: str = "Markdown") -> bool:
         """Send a message to the user via Telegram."""
         if not self.enabled:
-            print(f"[telegram] Notifications disabled (no token/user_id)")
+            print("[telegram] Notifications disabled (no token/user_id)")
             return False
 
         try:
@@ -40,7 +40,7 @@ class TelegramReporter:
                 "chat_id": self.user_id,
                 "text": text,
                 "parse_mode": parse_mode,
-                "disable_web_page_preview": True
+                "disable_web_page_preview": True,
             }
 
             async with httpx.AsyncClient() as client:
@@ -57,17 +57,12 @@ class TelegramReporter:
             return False
 
     async def notify_task_started(
-        self,
-        task_id: UUID,
-        title: str,
-        agent_id: str,
-        branch: str,
-        plan: dict
+        self, task_id: UUID, title: str, agent_id: str, branch: str, plan: dict
     ) -> bool:
         """Notify that a God Mode task has started."""
         phases = plan.get("phases", [])
         phase_list = "\n".join(
-            f" {i+1}. {phase['name']}"
+            f" {i + 1}. {phase['name']}"
             for i, phase in enumerate(phases[:5])  # Max 5 phases in notification
         )
 
@@ -101,18 +96,20 @@ _Next update in 5 minutes..._
         progress_pct: int,
         tests_passed: Optional[int] = None,
         tests_total: Optional[int] = None,
-        score: Optional[int] = None
+        score: Optional[int] = None,
     ) -> bool:
         """Notify about task progress."""
         # Phase status
         phase_status = []
         for i in range(total_phases):
             if i < current_phase:
-                phase_status.append(f"Phase {i+1}/{total_phases}: ✅ Complete")
+                phase_status.append(f"Phase {i + 1}/{total_phases}: ✅ Complete")
             elif i == current_phase:
-                phase_status.append(f"Phase {i+1}/{total_phases}: 🔄 In progress ({progress_pct}%)")
+                phase_status.append(
+                    f"Phase {i + 1}/{total_phases}: 🔄 In progress ({progress_pct}%)"
+                )
             else:
-                phase_status.append(f"Phase {i+1}/{total_phases}: ⏸️ Pending")
+                phase_status.append(f"Phase {i + 1}/{total_phases}: ⏸️ Pending")
 
         phase_text = "\n".join(phase_status[:3])  # Show max 3 phases
         if total_phases > 3:
@@ -140,12 +137,7 @@ _Next update in 5 minutes..._
         return await self.send_message(text)
 
     async def notify_validation_results(
-        self,
-        task_id: UUID,
-        title: str,
-        score: int,
-        validation_results: dict,
-        accepted: bool
+        self, task_id: UUID, title: str, score: int, validation_results: dict, accepted: bool
     ) -> bool:
         """Notify about validation results."""
         results = validation_results or {}
@@ -206,7 +198,7 @@ _Next update in 5 minutes..._
         tests_total: int,
         commits: list[str],
         files_changed: list[str],
-        merge_commit: Optional[str] = None
+        merge_commit: Optional[str] = None,
     ) -> bool:
         """Notify that a task completed successfully."""
         duration_min = duration_ms // 60000
@@ -242,7 +234,7 @@ _Next update in 5 minutes..._
         attempts: int,
         max_attempts: int,
         error: str,
-        validation_results: Optional[dict] = None
+        validation_results: Optional[dict] = None,
     ) -> bool:
         """Notify that a task failed after max retries."""
         # Extract key issues
@@ -284,11 +276,7 @@ _Agent logs saved to:_
         return await self.send_message(text)
 
     async def notify_manual_intervention(
-        self,
-        task_id: UUID,
-        title: str,
-        reason: str,
-        action_required: str
+        self, task_id: UUID, title: str, reason: str, action_required: str
     ) -> bool:
         """Notify that manual intervention is required."""
         text = f"""⚠️ *Manual Intervention Required*

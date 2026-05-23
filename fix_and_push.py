@@ -1,4 +1,7 @@
-import sys, os, requests, subprocess
+import sys
+import os
+import requests
+import subprocess
 
 # API Key and URL set via environment variables
 KEY = os.environ.get("ANTHROPIC_API_KEY")
@@ -14,7 +17,7 @@ MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 
 def run_agent():
     if len(sys.argv) < 3:
-        print("❌ Χρήση: python fix_and_push.py <αρχείο> \"οδηγία\"")
+        print('❌ Χρήση: python fix_and_push.py <αρχείο> "οδηγία"')
         return
 
     target_file = sys.argv[1]
@@ -24,28 +27,30 @@ def run_agent():
         print(f"❌ Το αρχείο {target_file} δεν υπάρχει!")
         return
 
-    with open(target_file, 'r', encoding='utf-8') as f:
+    with open(target_file, "r", encoding="utf-8") as f:
         code = f.read()
 
     print(f"🤖 Ο {MODEL} επεξεργάζεται το {target_file}...")
     headers = {
         "x-api-key": KEY,
         "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
+        "content-type": "application/json",
     }
     data = {
         "model": MODEL,
         "max_tokens": 4000,
         "system": "Επίστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ ΚΑΙ ΜΟΝΟ τον διορθωμένο κώδικα. Χωρίς markdown, χωρίς ```python, χωρίς επεξηγήσεις.",
-        "messages": [{"role": "user", "content": f"Κάνε αυτή την αλλαγή: {instruction}\n\nΚώδικας:\n{code}"}]
+        "messages": [
+            {"role": "user", "content": f"Κάνε αυτή την αλλαγή: {instruction}\n\nΚώδικας:\n{code}"}
+        ],
     }
     try:
         response = requests.post(URL, headers=headers, json=data)
         response.raise_for_status()
         res = response.json()
 
-        if 'content' in res and len(res['content']) > 0:
-            new_code = res['content'][0]['text'].strip()
+        if "content" in res and len(res["content"]) > 0:
+            new_code = res["content"][0]["text"].strip()
         else:
             print("❌ Κενή απάντηση από API")
             return
@@ -53,7 +58,7 @@ def run_agent():
         print(f"❌ Σφάλμα σύνδεσης: {e}")
         return
 
-    with open(target_file, 'w', encoding='utf-8') as f:
+    with open(target_file, "w", encoding="utf-8") as f:
         f.write(new_code)
 
     print(f"✅ Οι αλλαγές εφαρμόστηκαν στο {target_file}.")

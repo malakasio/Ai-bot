@@ -25,9 +25,9 @@ Bug 9 (DoS): LimitBodySize called int(content_length) with no try/except.
 Bug 11 (SSRF): tool_http_request had no SSRF guard.
        Trigger: ask agent to fetch http://169.254.169.254/ → cloud metadata leak.
 """
-import asyncio
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 
 class TestBug1TelegramArgOrder:
@@ -37,6 +37,7 @@ class TestBug1TelegramArgOrder:
         """send_safe must accept (bot, chat_id, text) — bot first."""
         import inspect
         from jarvis.api.telegram_bot import send_safe
+
         sig = inspect.signature(send_safe)
         params = list(sig.parameters.keys())
         # First param must be 'bot', second must be 'chat_id'
@@ -87,6 +88,7 @@ class TestBug2VoicePipelineHistory:
         """
         import ast
         from pathlib import Path
+
         src = Path("src/jarvis/voice/pipeline.py").read_text()
         tree = ast.parse(src)
 
@@ -97,8 +99,7 @@ class TestBug2VoicePipelineHistory:
                 has_yield = any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(node))
                 # Check if it has return with a value
                 has_return_with_value = any(
-                    isinstance(n, ast.Return) and n.value is not None
-                    for n in ast.walk(node)
+                    isinstance(n, ast.Return) and n.value is not None for n in ast.walk(node)
                 )
                 if has_yield:
                     assert not has_return_with_value, (
@@ -113,9 +114,10 @@ class TestBug2VoicePipelineHistory:
         BEFORE yielding audio, so caller can access it after iteration.
         """
         import os
+
         os.environ["JARVIS_HOME"] = "/tmp/jarvis_test_bugs"
 
-        from jarvis.voice.pipeline import VoiceSession, VoiceState
+        from jarvis.voice.pipeline import VoiceSession
 
         session = VoiceSession(session_id="test-123")
         assert session.collected_tokens == ""
@@ -138,10 +140,12 @@ class TestBug2VoicePipelineHistory:
 
         # Caller can now append to history correctly
         if session.collected_tokens:
-            session.history.append({
-                "role": "assistant",
-                "content": session.collected_tokens,
-            })
+            session.history.append(
+                {
+                    "role": "assistant",
+                    "content": session.collected_tokens,
+                }
+            )
         assert len(session.history) == 1
         assert session.history[0]["content"] == "Γεια σου, εγώ είμαι ο JARVIS."
 
@@ -153,6 +157,7 @@ class TestBug2VoicePipelineHistory:
         With fix: history alternates user/assistant correctly.
         """
         import os
+
         os.environ["JARVIS_HOME"] = "/tmp/jarvis_test_bugs"
 
         from jarvis.voice.pipeline import VoiceSession
@@ -201,7 +206,8 @@ class TestBug9ContentLength:
     @pytest.mark.asyncio
     async def test_normal_content_length_passes(self):
         from jarvis.api.main import LimitBodySize
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import AsyncMock
+
         middleware = LimitBodySize(app=MagicMock())
         request = MagicMock()
         request.headers.get.return_value = "100"
@@ -215,23 +221,27 @@ class TestBug11SSRFGuard:
 
     def test_localhost_blocked(self):
         from jarvis.tools.registry import _is_ssrf_url
+
         assert _is_ssrf_url("http://127.0.0.1/admin")
         assert _is_ssrf_url("http://localhost/secret")
         assert _is_ssrf_url("http://0.0.0.0/")
 
     def test_private_ip_blocked(self):
         from jarvis.tools.registry import _is_ssrf_url
+
         assert _is_ssrf_url("http://10.0.0.1/")
         assert _is_ssrf_url("http://192.168.1.1/")
         assert _is_ssrf_url("http://172.16.0.1/")
 
     def test_metadata_endpoint_blocked(self):
         from jarvis.tools.registry import _is_ssrf_url
+
         assert _is_ssrf_url("http://169.254.169.254/latest/meta-data/")
         assert _is_ssrf_url("http://metadata.google.internal/")
 
     def test_external_url_allowed(self):
         from jarvis.tools.registry import _is_ssrf_url
+
         assert not _is_ssrf_url("https://api.anthropic.com/v1/messages")
         assert not _is_ssrf_url("https://google.com/")
         assert not _is_ssrf_url("https://api.telegram.org/")
@@ -242,6 +252,7 @@ class TestBug6AgentTeamPayload:
 
     def test_payload_extraction(self):
         import json
+
         payload_json = json.dumps({"text": "summarize this document", "type": "simple_qa"})
         payload = json.loads(payload_json)
         task_text = payload.get("text", str(payload)) if isinstance(payload, dict) else str(payload)
@@ -250,6 +261,7 @@ class TestBug6AgentTeamPayload:
 
     def test_payload_fallback_to_str(self):
         import json
+
         payload_json = json.dumps({"type": "communication", "historyId": "abc"})
         payload = json.loads(payload_json)
         task_text = payload.get("text", str(payload)) if isinstance(payload, dict) else str(payload)
@@ -262,6 +274,7 @@ class TestBug3PathTraversal:
 
     def test_traversal_blocked(self):
         from pathlib import Path
+
         skills_root = Path(".claude/skills").resolve()
         malicious_names = [
             "../../etc/passwd",
@@ -275,6 +288,7 @@ class TestBug3PathTraversal:
 
     def test_valid_skill_name_allowed(self):
         from pathlib import Path
+
         skills_root = Path(".claude/skills").resolve()
         for name in ["agents", "memory", "voice"]:
             candidate = (skills_root / name / "SKILL.md").resolve()

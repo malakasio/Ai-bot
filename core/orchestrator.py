@@ -21,6 +21,7 @@ Score < 70: Reject and re-assign with specific feedback.
 Score 70-85: Accept with improvement notes.
 Score > 85: Accept fully.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -78,6 +79,7 @@ JSON array:"""
 
         # Parse JSON
         import re
+
         match = re.search(r"\[.*?\]", response, re.DOTALL)
         if match:
             subtasks = json.loads(match.group())
@@ -139,8 +141,7 @@ async def aggregate_results(original_task: str, results: list[SubTaskResult]) ->
 
     # Build aggregation prompt
     parts = "\n\n".join(
-        f"### Subtask {i+1}: {r.subtask[:100]}\n{r.output[:1000]}"
-        for i, r in enumerate(results)
+        f"### Subtask {i + 1}: {r.subtask[:100]}\n{r.output[:1000]}" for i, r in enumerate(results)
     )
 
     prompt = f"""Aggregate these sub-task results into a coherent final answer for:

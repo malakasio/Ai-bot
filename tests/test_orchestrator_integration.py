@@ -1,6 +1,5 @@
 """Tests for orchestrator integration into core agent loop."""
 
-import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -81,8 +80,7 @@ class TestOrchestrationRouting:
                 # (would fail if it did, since we haven't mocked run_orchestrated)
                 try:
                     result = await run_jarvis_core(
-                        "analyze this complex task thoroughly",
-                        max_iterations=1
+                        "analyze this complex task thoroughly", max_iterations=1
                     )
                     # If we get here, single-agent path was used
                     assert result is not None
@@ -107,10 +105,7 @@ class TestOrchestrationRouting:
         with patch("core.orchestrator.run_orchestrated", new_callable=AsyncMock) as mock_orch:
             mock_orch.return_value = mock_orch_result
 
-            result = await run_jarvis_core(
-                "Simple task",
-                use_orchestrator=True
-            )
+            result = await run_jarvis_core("Simple task", use_orchestrator=True)
 
             # Verify orchestration was called
             mock_orch.assert_called_once_with("Simple task")
@@ -137,7 +132,7 @@ class TestOrchestrationRouting:
                 result = await run_jarvis_core(
                     "analyze compare research investigate thoroughly",
                     use_orchestrator=False,
-                    max_iterations=1
+                    max_iterations=1,
                 )
 
                 # Should not have orchestration metadata
@@ -185,8 +180,7 @@ class TestOrchestrationRouting:
 
                     # Should fall back to single-agent
                     result = await run_jarvis_core(
-                        "analyze compare research investigate",
-                        max_iterations=1
+                        "analyze compare research investigate", max_iterations=1
                     )
 
                     # Should not have orchestration metadata
@@ -209,7 +203,7 @@ class TestBackwardCompatibility:
                 "test prompt",
                 tools=[{"name": "test_tool", "description": "test"}],
                 system="test system prompt",
-                max_iterations=1
+                max_iterations=1,
             )
 
             assert result is not None

@@ -52,18 +52,17 @@ import os
 import tempfile
 import time
 from collections import OrderedDict
-from pathlib import Path
 from typing import Any, Optional
 
 
 # ─── Module-level state ─────────────────────────────────────────────────────
 
 
-_MAX_MESSAGE_LEN = 4000          # Telegram hard limit is 4096; leave room
-_MAX_HISTORY_PER_CHAT = 20       # message pairs kept per chat
-_MAX_CACHED_CHATS = 200          # LRU bound on number of distinct chats
-_AGENT_TIMEOUT_S = 180.0         # cap a single agent run at 3 minutes
-_MAX_PROMPT_CHARS = 8000         # truncate enormous inbound messages
+_MAX_MESSAGE_LEN = 4000  # Telegram hard limit is 4096; leave room
+_MAX_HISTORY_PER_CHAT = 20  # message pairs kept per chat
+_MAX_CACHED_CHATS = 200  # LRU bound on number of distinct chats
+_AGENT_TIMEOUT_S = 180.0  # cap a single agent run at 3 minutes
+_MAX_PROMPT_CHARS = 8000  # truncate enormous inbound messages
 
 # chat_id -> deque-like list of {"role": "user"|"assistant", "content": str}
 _history: "OrderedDict[int, list[dict[str, str]]]" = OrderedDict()
@@ -73,8 +72,7 @@ def _log() -> logging.Logger:
     log = logging.getLogger("jarvis.telegram")
     if not log.handlers:
         h = logging.StreamHandler()
-        h.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
         log.addHandler(h)
         log.setLevel(logging.INFO)
         log.propagate = False
@@ -89,8 +87,7 @@ def _bot_token() -> str:
 
 
 def _allowed_user_id() -> Optional[int]:
-    raw = (os.environ.get("TELEGRAM_USER_ID", "")
-           or os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
+    raw = (os.environ.get("TELEGRAM_USER_ID", "") or os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
     if not raw:
         return None
     try:
@@ -148,7 +145,7 @@ def _format_prompt_with_history(chat_id: int, user_text: str) -> str:
     if not hist:
         return user_text
     lines: list[str] = ["[conversation so far]"]
-    for entry in hist[-2 * _MAX_HISTORY_PER_CHAT:]:
+    for entry in hist[-2 * _MAX_HISTORY_PER_CHAT :]:
         role = "User" if entry["role"] == "user" else "Assistant"
         # Defensive truncation per turn so a giant past message doesn't
         # dominate the budget.
@@ -322,20 +319,23 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
         def _make_dispatcher(qualified_name: str):
             async def _dispatch(args: dict[str, Any]) -> Any:
                 return await router.dispatch(qualified_name, args)
+
             return _dispatch
 
         tools = []
         for t in raw_tools:
             qualified = t["qualified"]
             safe = _sanitize(qualified)
-            tools.append({
-                "name": safe,
-                "description": t.get("description", ""),
-                "input_schema": t.get("input_schema",
-                                      {"type": "object",
-                                       "properties": {},
-                                       "additionalProperties": True}),
-            })
+            tools.append(
+                {
+                    "name": safe,
+                    "description": t.get("description", ""),
+                    "input_schema": t.get(
+                        "input_schema",
+                        {"type": "object", "properties": {}, "additionalProperties": True},
+                    ),
+                }
+            )
             # Bridge: when the agent dispatches `safe`, route to the real
             # qualified name through the MCP router.
             register_mcp_tool(safe, _make_dispatcher(qualified))
@@ -353,6 +353,7 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
         system_prompt = None
         try:
             from pathlib import Path
+
             claude_md = Path(__file__).resolve().parent.parent / "CLAUDE.md"
             if claude_md.exists():
                 system_prompt = claude_md.read_text().strip()
@@ -365,8 +366,7 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
             timeout=_AGENT_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
-        return ("⚠️ Agent timed out after "
-                f"{int(_AGENT_TIMEOUT_S)}s. Try a smaller prompt or /clear.")
+        return f"⚠️ Agent timed out after {int(_AGENT_TIMEOUT_S)}s. Try a smaller prompt or /clear."
     except Exception as e:
         _log().exception("agent run failed")
         return f"⚠️ Agent error: {e!r}"
@@ -391,6 +391,7 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
                     if isinstance(tool_content, str):
                         try:
                             import json
+
                             result = json.loads(tool_content)
                         except Exception as e:
                             _log().debug(f"Failed to parse tool_content as JSON: {e}")
@@ -400,10 +401,14 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
                     # MCP tools return {ok: True, data: {...}, error: None}
                     # Extract screenshot from the data field
                     if isinstance(result, dict):
-                        data = result.get("data", result)  # Handle both wrapped and unwrapped formats
+                        data = result.get(
+                            "data", result
+                        )  # Handle both wrapped and unwrapped formats
                         if isinstance(data, dict) and "screenshot_base64" in data:
                             screenshots.append(data["screenshot_base64"])
-                            _log().info(f"Found screenshot in transcript, size: {data.get('size_bytes', 'unknown')} bytes")
+                            _log().info(
+                                f"Found screenshot in transcript, size: {data.get('size_bytes', 'unknown')} bytes"
+                            )
 
     # Send screenshots via Telegram
     if screenshots:
@@ -420,11 +425,13 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
                     await bot.send_photo(
                         chat_id=chat_id,
                         photo=BytesIO(img_bytes),
-                        caption=f"Screenshot {i+1}/{len(screenshots)}" if len(screenshots) > 1 else None
+                        caption=f"Screenshot {i + 1}/{len(screenshots)}"
+                        if len(screenshots) > 1
+                        else None,
                     )
-                    _log().info(f"Screenshot {i+1}/{len(screenshots)} sent successfully")
+                    _log().info(f"Screenshot {i + 1}/{len(screenshots)} sent successfully")
                 except Exception as e:
-                    _log().error(f"Failed to send screenshot {i+1}: {e}")
+                    _log().error(f"Failed to send screenshot {i + 1}: {e}")
         except Exception as e:
             _log().error(f"Failed to process screenshots: {e}")
     else:
@@ -484,34 +491,42 @@ async def start_telegram_bot() -> None:
             if user.id != allowed_user_id:
                 log.warning(
                     "unauthorized user_id=%s expected=%s",
-                    user.id, allowed_user_id,
+                    user.id,
+                    allowed_user_id,
                 )
                 try:
                     await context.bot.send_message(
                         chat.id,
-                        (f"🔒 Unauthorized. Your user ID: `{user.id}`. "
-                         f"Set TELEGRAM_USER_ID={user.id} to grant access."),
+                        (
+                            f"🔒 Unauthorized. Your user ID: `{user.id}`. "
+                            f"Set TELEGRAM_USER_ID={user.id} to grant access."
+                        ),
                         parse_mode="Markdown",
                     )
                 except Exception:
                     pass
                 return
             await handler(update, context)
+
         return wrapper
 
     # ── Commands ────────────────────────────────────────────────────────
 
     @auth_required
     async def cmd_start(update, context):
-        await _send(context.bot, update.effective_chat.id,
+        await _send(
+            context.bot,
+            update.effective_chat.id,
             "🤖 *JARVIS online.*\n\n"
             "Send any text and I'll route it through the agent.\n"
-            "/help for commands."
+            "/help for commands.",
         )
 
     @auth_required
     async def cmd_help(update, context):
-        await _send(context.bot, update.effective_chat.id,
+        await _send(
+            context.bot,
+            update.effective_chat.id,
             "*JARVIS — commands*\n\n"
             "`/start`   — greeting + status\n"
             "`/help`    — this message\n"
@@ -519,20 +534,20 @@ async def start_telegram_bot() -> None:
             "`/whoami`  — your Telegram user id\n"
             "`/clear`   — clear this chat's conversation history\n"
             "`/status`  — runtime status\n\n"
-            "Any other text is sent to the agent. Replies arrive in this chat."
+            "Any other text is sent to the agent. Replies arrive in this chat.",
         )
 
     @auth_required
     async def cmd_whoami(update, context):
         u = update.effective_user
-        await _send(context.bot, update.effective_chat.id,
-                    f"You are `{u.id}` ({u.username or '—'}).")
+        await _send(
+            context.bot, update.effective_chat.id, f"You are `{u.id}` ({u.username or '—'})."
+        )
 
     @auth_required
     async def cmd_clear(update, context):
         _clear_history(update.effective_chat.id)
-        await _send(context.bot, update.effective_chat.id,
-                    "🧹 Conversation history cleared.")
+        await _send(context.bot, update.effective_chat.id, "🧹 Conversation history cleared.")
 
     @auth_required
     async def cmd_status(update, context):
@@ -548,8 +563,7 @@ async def start_telegram_bot() -> None:
     async def cmd_ping(update, context):
         # No auth on /ping — useful as an external liveness check.
         try:
-            await context.bot.send_message(update.effective_chat.id,
-                                           "🟢 JARVIS online")
+            await context.bot.send_message(update.effective_chat.id, "🟢 JARVIS online")
         except Exception:
             pass
 
@@ -563,9 +577,11 @@ async def start_telegram_bot() -> None:
             return
 
         if len(text) > _MAX_PROMPT_CHARS:
-            await _send(context.bot, chat_id,
-                f"⚠️ Message too long ({len(text)} chars > "
-                f"{_MAX_PROMPT_CHARS}). Truncating.")
+            await _send(
+                context.bot,
+                chat_id,
+                f"⚠️ Message too long ({len(text)} chars > {_MAX_PROMPT_CHARS}). Truncating.",
+            )
             text = text[:_MAX_PROMPT_CHARS]
 
         # Show "typing…" so the operator knows the bot received the message.
@@ -589,8 +605,7 @@ async def start_telegram_bot() -> None:
         # Record assistant turn (even on error replies — useful context).
         _append_history(chat_id, "assistant", reply)
 
-        log.info("agent.reply chat_id=%s len=%d dt=%.2fs",
-                 chat_id, len(reply), dt)
+        log.info("agent.reply chat_id=%s len=%d dt=%.2fs", chat_id, len(reply), dt)
 
         await _send(context.bot, chat_id, reply)
 
@@ -603,8 +618,9 @@ async def start_telegram_bot() -> None:
         if not voice:
             return
 
-        log.info(f"Received voice message: duration={voice.duration}s, "
-                 f"file_size={voice.file_size} bytes")
+        log.info(
+            f"Received voice message: duration={voice.duration}s, file_size={voice.file_size} bytes"
+        )
 
         # Show "typing…" while processing
         try:
@@ -634,19 +650,20 @@ async def start_telegram_bot() -> None:
                 log.info(f"Transcription: {text[:100]}...")
             except Exception as e:
                 log.error(f"Transcription failed: {e}")
-                await _send(context.bot, chat_id,
-                           f"⚠️ Voice transcription failed: {e}")
+                await _send(context.bot, chat_id, f"⚠️ Voice transcription failed: {e}")
                 return
 
             # Send transcription confirmation
-            await _send(context.bot, chat_id,
-                       f"🎤 _Transcribed:_ {text}\n\n_Processing..._")
+            await _send(context.bot, chat_id, f"🎤 _Transcribed:_ {text}\n\n_Processing..._")
 
             # Process through agent like text message
             if len(text) > _MAX_PROMPT_CHARS:
-                await _send(context.bot, chat_id,
+                await _send(
+                    context.bot,
+                    chat_id,
                     f"⚠️ Transcription too long ({len(text)} chars > "
-                    f"{_MAX_PROMPT_CHARS}). Truncating.")
+                    f"{_MAX_PROMPT_CHARS}). Truncating.",
+                )
                 text = text[:_MAX_PROMPT_CHARS]
 
             _append_history(chat_id, "user", text)
@@ -661,15 +678,13 @@ async def start_telegram_bot() -> None:
 
             _append_history(chat_id, "assistant", reply)
 
-            log.info("agent.reply (voice) chat_id=%s len=%d dt=%.2fs",
-                     chat_id, len(reply), dt)
+            log.info("agent.reply (voice) chat_id=%s len=%d dt=%.2fs", chat_id, len(reply), dt)
 
             await _send(context.bot, chat_id, reply)
 
         except Exception as e:
             log.exception("handle_voice crashed")
-            await _send(context.bot, chat_id,
-                       f"⚠️ Voice message processing failed: {e!r}")
+            await _send(context.bot, chat_id, f"⚠️ Voice message processing failed: {e!r}")
         finally:
             # Clean up temp file
             if temp_file and os.path.exists(temp_path):
@@ -701,12 +716,8 @@ async def start_telegram_bot() -> None:
     application.add_handler(CommandHandler("whoami", cmd_whoami))
     application.add_handler(CommandHandler("clear", cmd_clear))
     application.add_handler(CommandHandler("status", cmd_status))
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
-    )
-    application.add_handler(
-        MessageHandler(filters.VOICE, handle_voice)
-    )
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_error_handler(on_error)
 
     # Drop any pending webhook so polling can start cleanly.
@@ -716,8 +727,11 @@ async def start_telegram_bot() -> None:
         log.warning("delete_webhook failed (continuing): %r", e)
 
     webhook_url = os.environ.get("TELEGRAM_WEBHOOK_URL", "").strip()
-    log.info("telegram bot starting (user_id=%s, mode=%s)",
-             allowed_user_id, "webhook" if webhook_url else "polling")
+    log.info(
+        "telegram bot starting (user_id=%s, mode=%s)",
+        allowed_user_id,
+        "webhook" if webhook_url else "polling",
+    )
 
     await application.initialize()
     await application.start()

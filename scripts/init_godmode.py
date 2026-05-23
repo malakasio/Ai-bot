@@ -13,6 +13,7 @@ Usage:
 Environment variables:
     DATABASE_URL - PostgreSQL connection string (default: from core.database)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -62,11 +63,7 @@ async def main():
         return 1
 
     # Verify tables
-    tables_to_check = [
-        "god_mode_tasks",
-        "god_mode_phases",
-        "god_mode_events"
-    ]
+    tables_to_check = ["god_mode_tasks", "god_mode_phases", "god_mode_events"]
 
     print("\n[godmode-init] Verifying tables...")
     for table in tables_to_check:
@@ -79,7 +76,7 @@ async def main():
                     AND table_name = $1
                 )
                 """,
-                table
+                table,
             )
             if result:
                 print(f"[godmode-init]   ✓ {table}")
@@ -91,10 +88,7 @@ async def main():
             return 1
 
     # Verify functions
-    functions_to_check = [
-        "log_godmode_event",
-        "claim_next_godmode_task"
-    ]
+    functions_to_check = ["log_godmode_event", "claim_next_godmode_task"]
 
     print("\n[godmode-init] Verifying functions...")
     for func in functions_to_check:
@@ -106,7 +100,7 @@ async def main():
                     WHERE proname = $1
                 )
                 """,
-                func
+                func,
             )
             if result:
                 print(f"[godmode-init]   ✓ {func}()")
@@ -150,10 +144,7 @@ async def main():
         print(f"[godmode-init]   ✓ Created test task: {task_id}")
 
         # Clean up test task
-        await database.execute(
-            "DELETE FROM god_mode_tasks WHERE id = $1",
-            task_id
-        )
+        await database.execute("DELETE FROM god_mode_tasks WHERE id = $1", task_id)
         print("[godmode-init]   ✓ Cleaned up test task")
     except Exception as e:
         print(f"[godmode-init]   ✗ Task creation failed: {e}")
@@ -180,5 +171,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n[godmode-init] FATAL ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

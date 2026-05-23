@@ -24,11 +24,11 @@ Routes:
 - POST /godmode/tasks/{id}/cancel - Cancel task
 - GET /godmode/events - SSE stream for real-time updates
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -65,10 +65,7 @@ async def dashboard(request: Request):
 
 
 @router.get("/tasks")
-async def list_tasks(
-    status: Optional[str] = None,
-    limit: int = 50
-):
+async def list_tasks(status: Optional[str] = None, limit: int = 50):
     """List God Mode tasks with optional status filter."""
     where_clause = "WHERE deleted_at IS NULL"
     args = []
@@ -94,7 +91,7 @@ async def list_tasks(
         ORDER BY priority ASC, created_at DESC
         LIMIT ${len(args)}
         """,
-        *args
+        *args,
     )
 
     tasks = []
@@ -127,7 +124,7 @@ async def create_task(req: CreateTaskRequest):
         """,
         req.title,
         req.description,
-        req.priority
+        req.priority,
     )
 
     # Log event
@@ -137,7 +134,7 @@ async def create_task(req: CreateTaskRequest):
         VALUES ($1, 'task_created', 'user', $2::jsonb)
         """,
         row["id"],
-        json.dumps({"title": req.title})
+        json.dumps({"title": req.title}),
     )
 
     task = dict(row)
@@ -171,7 +168,7 @@ async def get_task(task_id: str):
         FROM god_mode_tasks
         WHERE id = $1 AND deleted_at IS NULL
         """,
-        task_uuid
+        task_uuid,
     )
 
     if not row:
@@ -181,8 +178,15 @@ async def get_task(task_id: str):
     task["id"] = str(task["id"])
 
     # Convert timestamps
-    for key in ["created_at", "updated_at", "plan_generated_at", "plan_approved_at",
-                "started_at", "finished_at", "last_notified_at"]:
+    for key in [
+        "created_at",
+        "updated_at",
+        "plan_generated_at",
+        "plan_approved_at",
+        "started_at",
+        "finished_at",
+        "last_notified_at",
+    ]:
         if task.get(key):
             task[key] = task[key].isoformat()
 
@@ -205,14 +209,16 @@ async def approve_task(task_id: str, req: ApproveTaskRequest):
     # Check task exists and has plan
     task = await database.fetchrow(
         "SELECT id, status, plan FROM god_mode_tasks WHERE id = $1 AND deleted_at IS NULL",
-        task_uuid
+        task_uuid,
     )
 
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
     if task["status"] != "pending":
-        raise HTTPException(status_code=400, detail=f"Task status is {task['status']}, expected 'pending'")
+        raise HTTPException(
+            status_code=400, detail=f"Task status is {task['status']}, expected 'pending'"
+        )
 
     if not task["plan"]:
         raise HTTPException(status_code=400, detail="Task has no plan to approve")
@@ -229,7 +235,7 @@ async def approve_task(task_id: str, req: ApproveTaskRequest):
         WHERE id = $1
         """,
         task_uuid,
-        req.approved_by
+        req.approved_by,
     )
 
     # Log event
@@ -239,7 +245,7 @@ async def approve_task(task_id: str, req: ApproveTaskRequest):
         VALUES ($1, 'plan_approved', $2, '{}'::jsonb)
         """,
         task_uuid,
-        req.approved_by
+        req.approved_by,
     )
 
     return {"success": True, "message": "Plan approved, task queued for execution"}
@@ -260,7 +266,7 @@ async def cancel_task(task_id: str):
             updated_at = now()
         WHERE id = $1 AND deleted_at IS NULL
         """,
-        task_uuid
+        task_uuid,
     )
 
     # Log event
@@ -269,7 +275,7 @@ async def cancel_task(task_id: str):
         INSERT INTO god_mode_events (task_id, event_type, actor, data)
         VALUES ($1, 'task_cancelled', 'user', '{}'::jsonb)
         """,
-        task_uuid
+        task_uuid,
     )
 
     return {"success": True, "message": "Task cancelled"}
@@ -278,6 +284,7 @@ async def cancel_task(task_id: str):
 @router.get("/events")
 async def event_stream(request: Request):
     """Server-Sent Events stream for real-time updates."""
+
     async def generate():
         last_event_id = 0
 
@@ -295,7 +302,7 @@ async def event_stream(request: Request):
                 ORDER BY id ASC
                 LIMIT 50
                 """,
-                last_event_id
+                last_event_id,
             )
 
             for row in rows:
@@ -307,7 +314,9 @@ async def event_stream(request: Request):
                     "phase_id": str(row["phase_id"]) if row["phase_id"] else None,
                     "event_type": row["event_type"],
                     "actor": row["actor"],
-                    "data": row["data"] if isinstance(row["data"], dict) else json.loads(row["data"] or "{}")
+                    "data": row["data"]
+                    if isinstance(row["data"], dict)
+                    else json.loads(row["data"] or "{}"),
                 }
 
                 # Send SSE event
@@ -319,8 +328,7 @@ async def event_stream(request: Request):
 
                 # Mark as notified
                 await database.execute(
-                    "UPDATE god_mode_events SET notified = TRUE WHERE id = $1",
-                    event_id
+                    "UPDATE god_mode_events SET notified = TRUE WHERE id = $1", event_id
                 )
 
             # Wait before next poll
@@ -332,8 +340,8 @@ async def event_stream(request: Request):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

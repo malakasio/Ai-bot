@@ -15,6 +15,7 @@ Architecture:
 Container image: python:3.11-slim with JARVIS dependencies
 Resource limits: 2 CPU cores, 4GB RAM, 10GB disk
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,6 +29,7 @@ from uuid import UUID
 @dataclass
 class Container:
     """Represents a Docker container for agent isolation."""
+
     container_id: str
     task_id: UUID
     image: str
@@ -49,7 +51,7 @@ class DockerManager:
         image: Optional[str] = None,
         cpu_limit: float = 2.0,
         memory_limit: str = "4g",
-        network_mode: str = "bridge"
+        network_mode: str = "bridge",
     ) -> Container:
         """
         Create isolated Docker container for agent execution.
@@ -79,29 +81,37 @@ class DockerManager:
         container_name = f"godmode-{task_id}"
 
         create_args = [
-            "docker", "run",
+            "docker",
+            "run",
             "-d",  # Detached
-            "--name", container_name,
+            "--name",
+            container_name,
             "--rm",  # Auto-remove on exit
             f"--cpus={cpu_limit}",
             f"--memory={memory_limit}",
             f"--network={network_mode}",
-            "--security-opt", "no-new-privileges",
+            "--security-opt",
+            "no-new-privileges",
             "--read-only",  # Read-only root filesystem
-            "--tmpfs", "/tmp:rw,noexec,nosuid,size=1g",
-            "-v", f"{worktree_path}:/workspace:rw",
-            "-w", "/workspace",
-            "-e", f"TASK_ID={task_id}",
-            "-e", "JARVIS_ZONE=green",
-            "-e", "PYTHONUNBUFFERED=1",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=1g",
+            "-v",
+            f"{worktree_path}:/workspace:rw",
+            "-w",
+            "/workspace",
+            "-e",
+            f"TASK_ID={task_id}",
+            "-e",
+            "JARVIS_ZONE=green",
+            "-e",
+            "PYTHONUNBUFFERED=1",
             image,
-            "sleep", "infinity"  # Keep container running
+            "sleep",
+            "infinity",  # Keep container running
         ]
 
         proc = await asyncio.create_subprocess_exec(
-            *create_args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *create_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await proc.communicate()
 
@@ -117,17 +127,14 @@ class DockerManager:
             task_id=task_id,
             image=image,
             worktree_path=worktree_path,
-            created_at=time.time()
+            created_at=time.time(),
         )
 
         self.containers[task_id] = container
         return container
 
     async def exec_command(
-        self,
-        container: Container,
-        command: str,
-        timeout: Optional[int] = None
+        self, container: Container, command: str, timeout: Optional[int] = None
     ) -> dict:
         """
         Execute command inside container.
@@ -141,26 +148,18 @@ class DockerManager:
             Dict with: exit_code, stdout, stderr, duration_ms
         """
         import time
+
         start_ms = int(time.time() * 1000)
 
-        exec_args = [
-            "docker", "exec",
-            container.container_id,
-            "bash", "-c", command
-        ]
+        exec_args = ["docker", "exec", container.container_id, "bash", "-c", command]
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                *exec_args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                *exec_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
 
             if timeout:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=timeout
-                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             else:
                 stdout, stderr = await proc.communicate()
 
@@ -170,7 +169,7 @@ class DockerManager:
                 "exit_code": proc.returncode,
                 "stdout": stdout.decode(),
                 "stderr": stderr.decode(),
-                "duration_ms": duration_ms
+                "duration_ms": duration_ms,
             }
 
         except asyncio.TimeoutError:
@@ -178,16 +177,16 @@ class DockerManager:
             await self.stop_container(container, force=True)
             raise RuntimeError(f"Command timed out after {timeout}s")
 
-    async def get_logs(
-        self,
-        container: Container,
-        tail: int = 100
-    ) -> str:
+    async def get_logs(self, container: Container, tail: int = 100) -> str:
         """Get container logs."""
         proc = await asyncio.create_subprocess_exec(
-            "docker", "logs", "--tail", str(tail), container.container_id,
+            "docker",
+            "logs",
+            "--tail",
+            str(tail),
+            container.container_id,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -196,10 +195,14 @@ class DockerManager:
     async def get_stats(self, container: Container) -> dict:
         """Get container resource usage stats."""
         proc = await asyncio.create_subprocess_exec(
-            "docker", "stats", "--no-stream", "--format", "{{json .}}",
+            "docker",
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{json .}}",
             container.container_id,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -213,16 +216,13 @@ class DockerManager:
                 "memory_usage": stats.get("MemUsage", "0B / 0B"),
                 "memory_percent": stats.get("MemPerc", "0%").rstrip("%"),
                 "net_io": stats.get("NetIO", "0B / 0B"),
-                "block_io": stats.get("BlockIO", "0B / 0B")
+                "block_io": stats.get("BlockIO", "0B / 0B"),
             }
         except json.JSONDecodeError:
             return {"error": "Failed to parse stats"}
 
     async def stop_container(
-        self,
-        container: Container,
-        force: bool = False,
-        timeout: int = 10
+        self, container: Container, force: bool = False, timeout: int = 10
     ) -> bool:
         """
         Stop and remove container.
@@ -241,9 +241,7 @@ class DockerManager:
             stop_args = ["docker", "stop", "-t", str(timeout), container.container_id]
 
         proc = await asyncio.create_subprocess_exec(
-            *stop_args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *stop_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await proc.communicate()
 
@@ -267,9 +265,12 @@ class DockerManager:
         """Ensure Docker image exists, pull if needed."""
         # Check if image exists
         proc = await asyncio.create_subprocess_exec(
-            "docker", "image", "inspect", image,
+            "docker",
+            "image",
+            "inspect",
+            image,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         await proc.communicate()
 
@@ -280,9 +281,7 @@ class DockerManager:
         print(f"[docker] Pulling image {image}...")
 
         proc = await asyncio.create_subprocess_exec(
-            "docker", "pull", image,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            "docker", "pull", image, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await proc.communicate()
 
@@ -339,12 +338,15 @@ CMD ["bash"]
         print("[docker] Building jarvis-godmode image...")
 
         proc = await asyncio.create_subprocess_exec(
-            "docker", "build",
-            "-t", "jarvis-godmode:latest",
-            "-f", str(dockerfile_path),
+            "docker",
+            "build",
+            "-t",
+            "jarvis-godmode:latest",
+            "-f",
+            str(dockerfile_path),
             str(repo_root),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 

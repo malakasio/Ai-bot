@@ -49,10 +49,10 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Protocol
 TTFA_TARGET_MS = 500
 
 DEFAULT_STT_MODEL = "nova-3"
-DEFAULT_LLM_MODEL = "claude-haiku-4-5"   # picked for sub-500 ms TTFT
+DEFAULT_LLM_MODEL = "claude-haiku-4-5"  # picked for sub-500 ms TTFT
 DEFAULT_TTS_MODEL = "eleven_flash_v2_5"
 DEFAULT_TTS_VOICE = "21m00Tcm4TlvDq8ikWAM"  # Rachel — public default
-DEFAULT_AUDIO_FORMAT = "linear16"           # 16-bit PCM @ 16 kHz mono in
+DEFAULT_AUDIO_FORMAT = "linear16"  # 16-bit PCM @ 16 kHz mono in
 DEFAULT_AUDIO_RATE = 16_000
 
 # When the assistant has streamed at least this many chars of text, start
@@ -66,13 +66,13 @@ TTS_FLUSH_MIN_CHARS = 24
 def _logger() -> logging.Logger:
     try:
         from core import agent as _agent
+
         return _agent.get_logger()
     except Exception:
         log = logging.getLogger("jarvis.voice")
         if not log.handlers:
             h = logging.StreamHandler()
-            h.setFormatter(logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+            h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
             log.addHandler(h)
             log.setLevel(logging.INFO)
         return log
@@ -93,6 +93,7 @@ class STTProvider(Protocol):
     transcript is committed and the next call to send() starts a new
     utterance.
     """
+
     async def stream(
         self, audio_chunks: AsyncIterator[bytes]
     ) -> AsyncIterator[tuple[str, bool]]: ...
@@ -100,16 +101,14 @@ class STTProvider(Protocol):
 
 class LLMProvider(Protocol):
     """Streaming LLM text generation. Yields text deltas."""
-    async def stream(
-        self, prompt: str, *, system: Optional[str] = None
-    ) -> AsyncIterator[str]: ...
+
+    async def stream(self, prompt: str, *, system: Optional[str] = None) -> AsyncIterator[str]: ...
 
 
 class TTSProvider(Protocol):
     """Streaming TTS. Text chunks in, audio bytes out."""
-    async def stream(
-        self, text_chunks: AsyncIterator[str]
-    ) -> AsyncIterator[bytes]: ...
+
+    async def stream(self, text_chunks: AsyncIterator[str]) -> AsyncIterator[bytes]: ...
 
 
 # ─── Deepgram Nova-3 (streaming STT) ──────────────────────────────────────
@@ -137,14 +136,11 @@ class DeepgramSTT:
         self.endpointing_ms = endpointing_ms
         self.interim_results = interim_results
 
-    async def stream(
-        self, audio_chunks: AsyncIterator[bytes]
-    ) -> AsyncIterator[tuple[str, bool]]:
+    async def stream(self, audio_chunks: AsyncIterator[bytes]) -> AsyncIterator[tuple[str, bool]]:
         try:
             import websockets
         except ImportError as e:
-            raise PipelineError(
-                "websockets not installed; pip install websockets") from e
+            raise PipelineError("websockets not installed; pip install websockets") from e
 
         params = (
             f"model={self.model}"
@@ -160,8 +156,10 @@ class DeepgramSTT:
         headers = [("Authorization", f"Token {self.api_key}")]
         log = _logger()
 
-        async with websockets.connect(url, additional_headers=headers,
-                                      max_size=8 * 1024 * 1024) as ws:
+        async with websockets.connect(
+            url, additional_headers=headers, max_size=8 * 1024 * 1024
+        ) as ws:
+
             async def _pump_audio() -> None:
                 try:
                     async for chunk in audio_chunks:
@@ -227,21 +225,20 @@ class AgentCoreLLM:
         self.system = system
         self.max_iterations = max_iterations
 
-    async def stream(
-        self, prompt: str, *, system: Optional[str] = None
-    ) -> AsyncIterator[str]:
+    async def stream(self, prompt: str, *, system: Optional[str] = None) -> AsyncIterator[str]:
         # Resolve MCP tools lazily to avoid import-time side effects.
         tools = None
         try:
             from mcp.router import get_router
+
             tools = [
                 {
                     "name": t["qualified"],
                     "description": t.get("description", ""),
-                    "input_schema": t.get("input_schema",
-                                          {"type": "object",
-                                           "properties": {},
-                                           "additionalProperties": True}),
+                    "input_schema": t.get(
+                        "input_schema",
+                        {"type": "object", "properties": {}, "additionalProperties": True},
+                    ),
                 }
                 for t in get_router().list_tools()
             ]
@@ -263,15 +260,14 @@ class AgentCoreLLM:
                     # Use transcript as query for semantic search
                     if prompt:
                         semantic_eps = await semantic_episodes(
-                            query=prompt,
-                            limit=5,
-                            min_confidence=0.7
+                            query=prompt, limit=5, min_confidence=0.7
                         )
                         # Merge: temporal (10) + semantic (up to 5)
                         episodes = episodes + semantic_eps
                 except Exception as e:
                     # Semantic search failed, continue with temporal only
                     import sys
+
                     print(f"[voice] Semantic retrieval failed: {e}", file=sys.stderr)
 
             if episodes:
@@ -280,15 +276,13 @@ class AgentCoreLLM:
                     f"{ep.get('input', ep.get('subject', ''))[:200]} -> {ep.get('output', ep.get('content', ''))[:200]}"
                     for ep in episodes
                 ]
-                ctx = (
-                    "Recent conversation history (last 10 episodes):\n"
-                    + "\n".join(lines_ctx)
-                )
+                ctx = "Recent conversation history (last 10 episodes):\n" + "\n".join(lines_ctx)
                 sys_p = f"{ctx}\n\n{sys_p or ''}".strip()
         except Exception:
             pass
 
         from core.agent import run_jarvis_core
+
         try:
             run = await run_jarvis_core(
                 prompt,
@@ -305,26 +299,30 @@ class AgentCoreLLM:
         # Persist this turn as an episode.
         try:
             from core.memory import Episode as _Ep, store_episode
-            await store_episode(_Ep(
-                actor="user",
-                tool="voice",
-                input=prompt[:1024],
-                output=response[:2048],
-                metadata={
-                    "run_id": run.run_id,
-                    "iterations": run.iterations,
-                    "stopped_reason": run.stopped_reason,
-                },
-            ))
+
+            await store_episode(
+                _Ep(
+                    actor="user",
+                    tool="voice",
+                    input=prompt[:1024],
+                    output=response[:2048],
+                    metadata={
+                        "run_id": run.run_id,
+                        "iterations": run.iterations,
+                        "stopped_reason": run.stopped_reason,
+                    },
+                )
+            )
         except Exception:
             pass
 
         # Yield in word-chunks so TTS can start playing immediately.
         words = response.split()
         for i in range(0, len(words), TTS_FLUSH_MIN_CHARS):
-            chunk = " ".join(words[i:i + TTS_FLUSH_MIN_CHARS])
+            chunk = " ".join(words[i : i + TTS_FLUSH_MIN_CHARS])
             if chunk:
                 yield chunk + " "
+
 
 class ElevenLabsTTS:
     def __init__(
@@ -339,21 +337,18 @@ class ElevenLabsTTS:
         self.api_key = api_key or os.environ.get("ELEVENLABS_API_KEY", "").strip()
         if not self.api_key:
             raise PipelineError("ELEVENLABS_API_KEY not set")
-        self.voice_id = (voice_id
-                         or os.environ.get("ELEVENLABS_VOICE_ID", "").strip()
-                         or DEFAULT_TTS_VOICE)
+        self.voice_id = (
+            voice_id or os.environ.get("ELEVENLABS_VOICE_ID", "").strip() or DEFAULT_TTS_VOICE
+        )
         self.model = model
         self.output_format = output_format
         self.optimize_streaming_latency = optimize_streaming_latency
 
-    async def stream(
-        self, text_chunks: AsyncIterator[str]
-    ) -> AsyncIterator[bytes]:
+    async def stream(self, text_chunks: AsyncIterator[str]) -> AsyncIterator[bytes]:
         try:
             import websockets
         except ImportError as e:
-            raise PipelineError(
-                "websockets not installed; pip install websockets") from e
+            raise PipelineError("websockets not installed; pip install websockets") from e
 
         # Input-streaming endpoint — sends text fragments, receives audio.
         url = (
@@ -365,27 +360,32 @@ class ElevenLabsTTS:
         headers = [("xi-api-key", self.api_key)]
         log = _logger()
 
-        async with websockets.connect(url, additional_headers=headers,
-                                      max_size=8 * 1024 * 1024) as ws:
+        async with websockets.connect(
+            url, additional_headers=headers, max_size=8 * 1024 * 1024
+        ) as ws:
             # Initial bos message with default voice settings.
-            await ws.send(json.dumps({
-                "text": " ",
-                "voice_settings": {
-                    "stability": 0.4, "similarity_boost": 0.8,
-                    "speed": 1.0,
-                },
-                "generation_config": {
-                    "chunk_length_schedule": [50, 90, 140, 200],
-                },
-            }))
+            await ws.send(
+                json.dumps(
+                    {
+                        "text": " ",
+                        "voice_settings": {
+                            "stability": 0.4,
+                            "similarity_boost": 0.8,
+                            "speed": 1.0,
+                        },
+                        "generation_config": {
+                            "chunk_length_schedule": [50, 90, 140, 200],
+                        },
+                    }
+                )
+            )
 
             async def _pump_text() -> None:
                 try:
                     async for chunk in text_chunks:
                         if not chunk:
                             continue
-                        await ws.send(json.dumps({"text": chunk,
-                                                  "try_trigger_generation": True}))
+                        await ws.send(json.dumps({"text": chunk, "try_trigger_generation": True}))
                     # End-of-stream sentinel.
                     await ws.send(json.dumps({"text": ""}))
                 except Exception as e:
@@ -423,8 +423,8 @@ class ElevenLabsTTS:
 
 @dataclass
 class PipelineMetrics:
-    audio_started_at: Optional[float] = None    # first audio byte from client
-    transcript_at: Optional[float] = None       # first final transcript
+    audio_started_at: Optional[float] = None  # first audio byte from client
+    transcript_at: Optional[float] = None  # first final transcript
     llm_first_token_at: Optional[float] = None
     tts_first_audio_at: Optional[float] = None
     finished_at: Optional[float] = None
@@ -474,8 +474,9 @@ class VoicePipeline:
             try:
                 await self.on_event(event, payload)
             except Exception as e:
-                _logger().warning("voice.event.callback_failed",
-                                  extra={"event": event, "exc": repr(e)})
+                _logger().warning(
+                    "voice.event.callback_failed", extra={"event": event, "exc": repr(e)}
+                )
 
     async def run_turn(
         self,
@@ -553,16 +554,19 @@ class VoicePipeline:
                 if m.tts_first_audio_at is None:
                     m.tts_first_audio_at = time.monotonic()
                     ttfa = m.ttfa_ms()
-                    log.info("voice.ttfa", extra={
-                        "ttfa_ms": ttfa, "target_ms": TTFA_TARGET_MS,
-                        "ok": (ttfa is not None and ttfa <= TTFA_TARGET_MS),
-                    })
+                    log.info(
+                        "voice.ttfa",
+                        extra={
+                            "ttfa_ms": ttfa,
+                            "target_ms": TTFA_TARGET_MS,
+                            "ok": (ttfa is not None and ttfa <= TTFA_TARGET_MS),
+                        },
+                    )
                     await self._emit("ttfa", {"ttfa_ms": ttfa})
                 try:
                     await audio_out(audio)
                 except Exception as e:
-                    log.warning("voice.audio_out.fail",
-                                extra={"exc": repr(e)})
+                    log.warning("voice.audio_out.fail", extra={"exc": repr(e)})
                     return
 
         await asyncio.gather(

@@ -16,6 +16,7 @@ Environment variables:
 - GROQ_API_KEY: Enable Groq free tier
 - OLLAMA_BASE_URL: Ollama endpoint (default: http://localhost:11434)
 """
+
 from __future__ import annotations
 
 import os
@@ -72,8 +73,14 @@ KEYWORD_ROUTES: list[tuple[list[str], TaskType]] = [
     (["ping", "hello", "ok", "thanks", "time", "date", "weather"], "simple_qa"),
     (["notification", "reminder", "alert"], "notification"),
     # Code
-    (["code", "python", "javascript", "bug", "error", "script", "debug", "fix", "refactor"], "code_review"),
-    (["write", "create", "implement", "function", "class", "module", "generate"], "code_generation"),
+    (
+        ["code", "python", "javascript", "bug", "error", "script", "debug", "fix", "refactor"],
+        "code_review",
+    ),
+    (
+        ["write", "create", "implement", "function", "class", "module", "generate"],
+        "code_generation",
+    ),
     # Analysis
     (["analyze", "logs", "report", "summary", "stats"], "analysis"),
     (["summarize", "compress", "tldr"], "summarization"),
@@ -110,12 +117,22 @@ def select_model(task_type: TaskType) -> RoutingDecision:
     if has_groq and not has_anthropic:
         model = (
             "llama-3.3-70b-versatile"
-            if task_type in ("architecture", "deep_debug", "critical", "code_generation", "code_review", "analysis")
+            if task_type
+            in (
+                "architecture",
+                "deep_debug",
+                "critical",
+                "code_generation",
+                "code_review",
+                "analysis",
+            )
             else "llama-3.1-8b-instant"
         )
         return RoutingDecision(
-            task_type=task_type, tier="local_fast",
-            model=model, provider="groq",
+            task_type=task_type,
+            tier="local_fast",
+            model=model,
+            provider="groq",
             reason="free Groq cloud LLM",
             expected_tokens=expected_tokens,
         )
@@ -125,57 +142,71 @@ def select_model(task_type: TaskType) -> RoutingDecision:
         # Haiku 4.5: fast tasks
         if task_type in ("simple_qa", "voice", "notification", "monitoring", "summarization"):
             return RoutingDecision(
-                task_type=task_type, tier="paid_fast",
-                model="claude-haiku-4-5", provider="anthropic",
+                task_type=task_type,
+                tier="paid_fast",
+                model="claude-haiku-4-5",
+                provider="anthropic",
                 reason="Claude Haiku: fast + cheap for simple tasks",
                 expected_tokens=expected_tokens,
             )
         # Sonnet 4.6: balanced — code, analysis
         if task_type in ("code_review", "code_generation", "analysis", "system_mgmt"):
             return RoutingDecision(
-                task_type=task_type, tier="paid_smart",
-                model="claude-sonnet-4-6", provider="anthropic",
+                task_type=task_type,
+                tier="paid_smart",
+                model="claude-sonnet-4-6",
+                provider="anthropic",
                 reason="Claude Sonnet: best speed/intelligence for code & analysis",
                 expected_tokens=expected_tokens,
             )
         # Opus 4.7: most capable — architecture, deep debugging, critical
         return RoutingDecision(
-            task_type=task_type, tier="paid_heavy",
-            model="claude-opus-4-7", provider="anthropic",
+            task_type=task_type,
+            tier="paid_heavy",
+            model="claude-opus-4-7",
+            provider="anthropic",
             reason="Claude Opus: maximum capability for complex tasks",
             expected_tokens=expected_tokens,
         )
 
     # Ollama fallback (local, free)
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     if task_type in ("simple_qa", "voice", "notification", "monitoring"):
         return RoutingDecision(
-            task_type=task_type, tier="local_fast",
-            model="llama3.2:3b", provider="ollama",
+            task_type=task_type,
+            tier="local_fast",
+            model="llama3.2:3b",
+            provider="ollama",
             reason="local fast model",
             expected_tokens=expected_tokens,
         )
 
     if task_type in ("code_review", "analysis", "system_mgmt", "summarization", "code_generation"):
         return RoutingDecision(
-            task_type=task_type, tier="local_smart",
-            model="qwen2.5-coder:7b", provider="ollama",
+            task_type=task_type,
+            tier="local_smart",
+            model="qwen2.5-coder:7b",
+            provider="ollama",
             reason="local smart model",
             expected_tokens=expected_tokens,
         )
 
     if task_type in ("architecture", "deep_debug", "critical"):
         return RoutingDecision(
-            task_type=task_type, tier="local_smart",
-            model="qwen2.5-coder:14b", provider="ollama",
+            task_type=task_type,
+            tier="local_smart",
+            model="qwen2.5-coder:14b",
+            provider="ollama",
             reason="local smart model (no Claude key)",
             expected_tokens=expected_tokens,
         )
 
     # Default
     return RoutingDecision(
-        task_type=task_type, tier="local_fast",
-        model="llama3.2:3b", provider="ollama",
+        task_type=task_type,
+        tier="local_fast",
+        model="llama3.2:3b",
+        provider="ollama",
         reason="default local fast",
         expected_tokens=expected_tokens,
     )

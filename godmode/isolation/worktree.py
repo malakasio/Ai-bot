@@ -17,11 +17,10 @@ Each worktree:
 - Can be merged back to main
 - Automatically cleaned up on completion
 """
+
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -31,6 +30,7 @@ from uuid import UUID
 @dataclass
 class Worktree:
     """Represents an isolated git worktree for an agent."""
+
     task_id: UUID
     path: Path
     branch: str
@@ -47,10 +47,7 @@ class WorktreeManager:
         self.worktrees_dir.mkdir(parents=True, exist_ok=True)
 
     async def create_worktree(
-        self,
-        task_id: UUID,
-        base_branch: str = "main",
-        new_branch: Optional[str] = None
+        self, task_id: UUID, base_branch: str = "main", new_branch: Optional[str] = None
     ) -> Worktree:
         """
         Create an isolated git worktree for a task.
@@ -79,10 +76,12 @@ class WorktreeManager:
 
         # Get base commit SHA
         proc = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", base_branch,
+            "git",
+            "rev-parse",
+            base_branch,
             cwd=self.repo_root,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -93,13 +92,16 @@ class WorktreeManager:
 
         # Create worktree with new branch
         proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "add",
-            "-b", new_branch,
+            "git",
+            "worktree",
+            "add",
+            "-b",
+            new_branch,
             str(worktree_path),
             base_branch,
             cwd=self.repo_root,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -113,16 +115,19 @@ class WorktreeManager:
             path=worktree_path,
             branch=new_branch,
             base_commit=base_commit,
-            created_at=time.time()
+            created_at=time.time(),
         )
 
     async def list_worktrees(self) -> list[dict]:
         """List all git worktrees."""
         proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "list", "--porcelain",
+            "git",
+            "worktree",
+            "list",
+            "--porcelain",
             cwd=self.repo_root,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -133,7 +138,7 @@ class WorktreeManager:
         worktrees = []
         current = {}
 
-        for line in stdout.decode().split('\n'):
+        for line in stdout.decode().split("\n"):
             line = line.strip()
             if not line:
                 if current:
@@ -141,16 +146,16 @@ class WorktreeManager:
                     current = {}
                 continue
 
-            if line.startswith('worktree '):
-                current['path'] = line.split(' ', 1)[1]
-            elif line.startswith('HEAD '):
-                current['commit'] = line.split(' ', 1)[1]
-            elif line.startswith('branch '):
-                current['branch'] = line.split(' ', 1)[1]
-            elif line == 'bare':
-                current['bare'] = True
-            elif line == 'detached':
-                current['detached'] = True
+            if line.startswith("worktree "):
+                current["path"] = line.split(" ", 1)[1]
+            elif line.startswith("HEAD "):
+                current["commit"] = line.split(" ", 1)[1]
+            elif line.startswith("branch "):
+                current["branch"] = line.split(" ", 1)[1]
+            elif line == "bare":
+                current["bare"] = True
+            elif line == "detached":
+                current["detached"] = True
 
         if current:
             worktrees.append(current)
@@ -166,10 +171,14 @@ class WorktreeManager:
         """
         # Get diff stats
         proc = await asyncio.create_subprocess_exec(
-            "git", "diff", "--stat", worktree.base_commit, "HEAD",
+            "git",
+            "diff",
+            "--stat",
+            worktree.base_commit,
+            "HEAD",
             cwd=worktree.path,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -178,21 +187,28 @@ class WorktreeManager:
 
         # Get list of changed files
         proc = await asyncio.create_subprocess_exec(
-            "git", "diff", "--name-only", worktree.base_commit, "HEAD",
+            "git",
+            "diff",
+            "--name-only",
+            worktree.base_commit,
+            "HEAD",
             cwd=worktree.path,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         files_stdout, _ = await proc.communicate()
 
-        files_changed = [f for f in files_stdout.decode().split('\n') if f]
+        files_changed = [f for f in files_stdout.decode().split("\n") if f]
 
         # Get commit count
         proc = await asyncio.create_subprocess_exec(
-            "git", "rev-list", "--count", f"{worktree.base_commit}..HEAD",
+            "git",
+            "rev-list",
+            "--count",
+            f"{worktree.base_commit}..HEAD",
             cwd=worktree.path,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         count_stdout, _ = await proc.communicate()
 
@@ -200,28 +216,27 @@ class WorktreeManager:
 
         # Get commit SHAs
         proc = await asyncio.create_subprocess_exec(
-            "git", "rev-list", f"{worktree.base_commit}..HEAD",
+            "git",
+            "rev-list",
+            f"{worktree.base_commit}..HEAD",
             cwd=worktree.path,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         commits_stdout, _ = await proc.communicate()
 
-        commits = [c for c in commits_stdout.decode().split('\n') if c]
+        commits = [c for c in commits_stdout.decode().split("\n") if c]
 
         return {
             "files_changed": files_changed,
             "file_count": len(files_changed),
             "commit_count": commit_count,
             "commits": commits,
-            "diff_stat": stdout.decode()
+            "diff_stat": stdout.decode(),
         }
 
     async def merge_worktree(
-        self,
-        worktree: Worktree,
-        target_branch: str = "main",
-        squash: bool = False
+        self, worktree: Worktree, target_branch: str = "main", squash: bool = False
     ) -> dict:
         """
         Merge worktree changes back to target branch.
@@ -236,10 +251,12 @@ class WorktreeManager:
         """
         # Switch to target branch in main repo
         proc = await asyncio.create_subprocess_exec(
-            "git", "checkout", target_branch,
+            "git",
+            "checkout",
+            target_branch,
             cwd=self.repo_root,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         await proc.communicate()
 
@@ -250,13 +267,15 @@ class WorktreeManager:
         merge_args = ["git", "merge"]
         if squash:
             merge_args.append("--squash")
-        merge_args.extend(["--no-ff", "-m", f"Merge God Mode task {worktree.task_id}", worktree.branch])
+        merge_args.extend(
+            ["--no-ff", "-m", f"Merge God Mode task {worktree.task_id}", worktree.branch]
+        )
 
         proc = await asyncio.create_subprocess_exec(
             *merge_args,
             cwd=self.repo_root,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -267,31 +286,25 @@ class WorktreeManager:
                     "success": False,
                     "conflicts": True,
                     "error": "Merge conflicts detected",
-                    "output": stdout.decode() + stderr.decode()
+                    "output": stdout.decode() + stderr.decode(),
                 }
-            return {
-                "success": False,
-                "conflicts": False,
-                "error": stderr.decode()
-            }
+            return {"success": False, "conflicts": False, "error": stderr.decode()}
 
         # Get merge commit SHA
         proc = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", "HEAD",
+            "git",
+            "rev-parse",
+            "HEAD",
             cwd=self.repo_root,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await proc.communicate()
         merge_commit = stdout.decode().strip()
 
         print(f"[worktree] Merged {worktree.branch} -> {target_branch} ({merge_commit[:8]})")
 
-        return {
-            "success": True,
-            "merge_commit": merge_commit,
-            "conflicts": False
-        }
+        return {"success": True, "merge_commit": merge_commit, "conflicts": False}
 
     async def cleanup_worktree(self, worktree: Worktree, force: bool = False) -> bool:
         """
@@ -314,7 +327,7 @@ class WorktreeManager:
             *remove_args,
             cwd=self.repo_root,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -324,10 +337,13 @@ class WorktreeManager:
 
         # Delete branch
         proc = await asyncio.create_subprocess_exec(
-            "git", "branch", "-D", worktree.branch,
+            "git",
+            "branch",
+            "-D",
+            worktree.branch,
             cwd=self.repo_root,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         await proc.communicate()
 
@@ -337,10 +353,12 @@ class WorktreeManager:
     async def has_uncommitted_changes(self, worktree: Worktree) -> bool:
         """Check if worktree has uncommitted changes."""
         proc = await asyncio.create_subprocess_exec(
-            "git", "status", "--porcelain",
+            "git",
+            "status",
+            "--porcelain",
             cwd=worktree.path,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await proc.communicate()
 

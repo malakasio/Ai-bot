@@ -12,6 +12,7 @@ Tests the full God Mode orchestration pipeline:
 Run with:
     pytest tests/test_godmode_integration.py -v
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -68,10 +69,7 @@ async def test_worktree_lifecycle(worktree_manager):
     task_id = uuid4()
 
     # Create worktree
-    worktree = await worktree_manager.create_worktree(
-        task_id=task_id,
-        base_branch="main"
-    )
+    worktree = await worktree_manager.create_worktree(task_id=task_id, base_branch="main")
 
     assert worktree.path.exists()
     assert worktree.branch == f"godmode/task-{task_id}"
@@ -81,15 +79,11 @@ async def test_worktree_lifecycle(worktree_manager):
     test_file.write_text("God Mode test file")
 
     # Commit change
-    proc = await asyncio.create_subprocess_exec(
-        "git", "add", "test_godmode.txt",
-        cwd=worktree.path
-    )
+    proc = await asyncio.create_subprocess_exec("git", "add", "test_godmode.txt", cwd=worktree.path)
     await proc.communicate()
 
     proc = await asyncio.create_subprocess_exec(
-        "git", "commit", "-m", "Test commit from God Mode",
-        cwd=worktree.path
+        "git", "commit", "-m", "Test commit from God Mode", cwd=worktree.path
     )
     await proc.communicate()
 
@@ -99,10 +93,7 @@ async def test_worktree_lifecycle(worktree_manager):
     assert changes["commit_count"] == 1
 
     # Merge to main
-    merge_result = await worktree_manager.merge_worktree(
-        worktree=worktree,
-        target_branch="main"
-    )
+    merge_result = await worktree_manager.merge_worktree(worktree=worktree, target_branch="main")
     assert merge_result["success"]
     assert merge_result["merge_commit"]
 
@@ -116,13 +107,11 @@ async def test_worktree_lifecycle(worktree_manager):
     if test_file_main.exists():
         test_file_main.unlink()
         proc = await asyncio.create_subprocess_exec(
-            "git", "add", "test_godmode.txt",
-            cwd=worktree_manager.repo_root
+            "git", "add", "test_godmode.txt", cwd=worktree_manager.repo_root
         )
         await proc.communicate()
         proc = await asyncio.create_subprocess_exec(
-            "git", "commit", "-m", "Remove test file",
-            cwd=worktree_manager.repo_root
+            "git", "commit", "-m", "Remove test file", cwd=worktree_manager.repo_root
         )
         await proc.communicate()
 
@@ -159,11 +148,7 @@ async def test_validation_syntax_check(worktree_manager):
     bad_file.write_text("def broken(\n    print('missing closing paren'")
 
     validator = ValidationPipeline(worktree.path)
-    result = await validator.validate(
-        task_id=task_id,
-        files_changed=["bad_syntax.py"],
-        commits=[]
-    )
+    result = await validator.validate(task_id=task_id, files_changed=["bad_syntax.py"], commits=[])
 
     assert not result.syntax["passed"]
     assert len(result.syntax["errors"]) > 0
@@ -184,11 +169,7 @@ async def test_validation_security_check(worktree_manager):
     secret_file.write_text('API_KEY = "sk-1234567890abcdef"')
 
     validator = ValidationPipeline(worktree.path)
-    result = await validator.validate(
-        task_id=task_id,
-        files_changed=["secrets.py"],
-        commits=[]
-    )
+    result = await validator.validate(task_id=task_id, files_changed=["secrets.py"], commits=[])
 
     assert not result.security["passed"]
     assert len(result.security["issues"]) > 0
@@ -215,11 +196,7 @@ if __name__ == "__main__":
 """)
 
     validator = ValidationPipeline(worktree.path)
-    result = await validator.validate(
-        task_id=task_id,
-        files_changed=["clean.py"],
-        commits=[]
-    )
+    result = await validator.validate(task_id=task_id, files_changed=["clean.py"], commits=[])
 
     assert result.syntax["passed"]
     assert result.security["passed"]
@@ -235,10 +212,7 @@ if __name__ == "__main__":
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    os.system("docker info > /dev/null 2>&1") != 0,
-    reason="Docker not available"
-)
+@pytest.mark.skipif(os.system("docker info > /dev/null 2>&1") != 0, reason="Docker not available")
 async def test_docker_container_lifecycle(docker_manager, worktree_manager):
     """Test Docker container creation and execution."""
     task_id = uuid4()
@@ -249,10 +223,7 @@ async def test_docker_container_lifecycle(docker_manager, worktree_manager):
     try:
         # Create container
         container = await docker_manager.create_container(
-            task_id=task_id,
-            worktree_path=worktree.path,
-            cpu_limit=1.0,
-            memory_limit="1g"
+            task_id=task_id, worktree_path=worktree.path, cpu_limit=1.0, memory_limit="1g"
         )
 
         assert container.container_id
@@ -260,8 +231,7 @@ async def test_docker_container_lifecycle(docker_manager, worktree_manager):
 
         # Execute command
         result = await docker_manager.exec_command(
-            container=container,
-            command="echo 'Hello from container'"
+            container=container, command="echo 'Hello from container'"
         )
 
         assert result["exit_code"] == 0
@@ -294,7 +264,7 @@ async def test_task_creation_and_lifecycle(db):
         RETURNING id, title, status
         """,
         "Test Task",
-        "Integration test task"
+        "Integration test task",
     )
 
     task_id = row["id"]
@@ -302,19 +272,11 @@ async def test_task_creation_and_lifecycle(db):
     assert row["status"] == "backlog"
 
     # Update to planning
-    await database.execute(
-        "UPDATE god_mode_tasks SET status = 'planning' WHERE id = $1",
-        task_id
-    )
+    await database.execute("UPDATE god_mode_tasks SET status = 'planning' WHERE id = $1", task_id)
 
     # Generate plan
     plan = {
-        "phases": [
-            {
-                "name": "Setup",
-                "steps": [{"step": "Initialize", "command": "echo setup"}]
-            }
-        ]
+        "phases": [{"name": "Setup", "steps": [{"step": "Initialize", "command": "echo setup"}]}]
     }
 
     await database.execute(
@@ -326,7 +288,7 @@ async def test_task_creation_and_lifecycle(db):
         WHERE id = $1
         """,
         task_id,
-        database.json.dumps(plan)
+        database.json.dumps(plan),
     )
 
     # Approve plan
@@ -338,23 +300,17 @@ async def test_task_creation_and_lifecycle(db):
             plan_approved_by = 'test'
         WHERE id = $1
         """,
-        task_id
+        task_id,
     )
 
     # Verify
-    task = await database.fetchrow(
-        "SELECT * FROM god_mode_tasks WHERE id = $1",
-        task_id
-    )
+    task = await database.fetchrow("SELECT * FROM god_mode_tasks WHERE id = $1", task_id)
 
     assert task["status"] == "pending"
     assert task["plan_approved"]
 
     # Cleanup
-    await database.execute(
-        "DELETE FROM god_mode_tasks WHERE id = $1",
-        task_id
-    )
+    await database.execute("DELETE FROM god_mode_tasks WHERE id = $1", task_id)
 
 
 @pytest.mark.asyncio
@@ -368,7 +324,7 @@ async def test_event_logging(db):
         INSERT INTO god_mode_tasks (id, title, status)
         VALUES ($1, 'Event Test', 'backlog')
         """,
-        task_id
+        task_id,
     )
 
     # Log events
@@ -377,7 +333,7 @@ async def test_event_logging(db):
         INSERT INTO god_mode_events (task_id, event_type, actor, data)
         VALUES ($1, 'task_created', 'test', '{}'::jsonb)
         """,
-        task_id
+        task_id,
     )
 
     await database.execute(
@@ -386,7 +342,7 @@ async def test_event_logging(db):
         VALUES ($1, 'agent_started', 'test-agent', $2::jsonb)
         """,
         task_id,
-        database.json.dumps({"agent_id": "test-agent"})
+        database.json.dumps({"agent_id": "test-agent"}),
     )
 
     # Query events
@@ -397,7 +353,7 @@ async def test_event_logging(db):
         WHERE task_id = $1
         ORDER BY ts ASC
         """,
-        task_id
+        task_id,
     )
 
     assert len(events) == 2
@@ -424,11 +380,8 @@ async def test_full_orchestration_flow(db, orchestrator, worktree_manager):
             {
                 "name": "Create test file",
                 "steps": [
-                    {
-                        "step": "Create file",
-                        "command": "echo 'test content' > test_output.txt"
-                    }
-                ]
+                    {"step": "Create file", "command": "echo 'test content' > test_output.txt"}
+                ],
             }
         ]
     }
@@ -444,21 +397,17 @@ async def test_full_orchestration_flow(db, orchestrator, worktree_manager):
         task_id,
         "Integration Test Task",
         "Full orchestration test",
-        database.json.dumps(plan)
+        database.json.dumps(plan),
     )
 
     # Execute task
-    task = await database.fetchrow(
-        "SELECT * FROM god_mode_tasks WHERE id = $1",
-        task_id
-    )
+    task = await database.fetchrow("SELECT * FROM god_mode_tasks WHERE id = $1", task_id)
 
     await orchestrator._execute_task(dict(task))
 
     # Verify task completed
     result = await database.fetchrow(
-        "SELECT status, validation_score, error FROM god_mode_tasks WHERE id = $1",
-        task_id
+        "SELECT status, validation_score, error FROM god_mode_tasks WHERE id = $1", task_id
     )
 
     # Task should complete (may pass or fail validation depending on environment)

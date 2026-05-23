@@ -9,10 +9,11 @@ Tracks:
 - Memory operations
 - KAIROS daemon runs
 """
+
 from __future__ import annotations
 
 import time
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass, field
 
 
@@ -54,7 +55,9 @@ class Gauge:
 class Histogram:
     name: str
     help: str
-    buckets: list[float] = field(default_factory=lambda: [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
+    buckets: list[float] = field(
+        default_factory=lambda: [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+    )
     _observations: list[float] = field(default_factory=list)
 
     def observe(self, value: float):
@@ -105,7 +108,9 @@ class MetricsRegistry:
 
         # Voice metrics
         self.voice_sessions_total = Counter("jarvis_voice_sessions_total", "Total voice sessions")
-        self.voice_latency = Histogram("jarvis_voice_e2e_latency_seconds", "End-to-end voice latency")
+        self.voice_latency = Histogram(
+            "jarvis_voice_e2e_latency_seconds", "End-to-end voice latency"
+        )
         self.stt_latency = Histogram("jarvis_stt_latency_seconds", "STT latency")
         self.tts_latency = Histogram("jarvis_tts_latency_seconds", "TTS latency")
         self.barge_in_total = Counter("jarvis_barge_in_total", "Total barge-in events")
@@ -115,7 +120,9 @@ class MetricsRegistry:
         self.tasks_success = Counter("jarvis_tasks_success", "Successful tasks")
         self.tasks_failed = Counter("jarvis_tasks_failed", "Failed tasks")
         self.task_score = Histogram("jarvis_task_score", "Task quality score (0-100)")
-        self.circuit_breaker_trips = Counter("jarvis_circuit_breaker_trips", "Circuit breaker activations")
+        self.circuit_breaker_trips = Counter(
+            "jarvis_circuit_breaker_trips", "Circuit breaker activations"
+        )
 
         # Memory metrics
         self.memory_writes = Counter("jarvis_memory_writes_total", "Memory write operations")

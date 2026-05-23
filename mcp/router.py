@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from ._common import Server, err, ok
+from ._common import Server, err
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,7 +33,7 @@ class Router:
             if not entry.get("enabled", True):
                 continue
             name = entry["name"]
-            module_path = entry["module"]   # e.g. "mcp.filesystem_mcp"
+            module_path = entry["module"]  # e.g. "mcp.filesystem_mcp"
             mod = importlib.import_module(module_path)
             if not hasattr(mod, "get_server"):
                 raise RuntimeError(f"{module_path} has no get_server()")
@@ -61,13 +60,15 @@ class Router:
         out = []
         for srv in self.servers.values():
             for t in srv.tools.values():
-                out.append({
-                    "qualified": f"{srv.name}.{t.name}",
-                    "name": t.name,
-                    "server": srv.name,
-                    "description": t.description,
-                    "input_schema": t.input_schema,
-                })
+                out.append(
+                    {
+                        "qualified": f"{srv.name}.{t.name}",
+                        "name": t.name,
+                        "server": srv.name,
+                        "description": t.description,
+                        "input_schema": t.input_schema,
+                    }
+                )
         return out
 
     def _resolve(self, tool: str) -> tuple[Optional[str], Optional[str]]:
@@ -88,21 +89,24 @@ class Router:
 
         server_name, tool_name = self._resolve(tool)
         if server_name is None and tool_name is None:
-            return err(f"unknown tool: {tool!r}", code="unknown_tool",
-                       available=[t["qualified"] for t in self.list_tools()])
+            return err(
+                f"unknown tool: {tool!r}",
+                code="unknown_tool",
+                available=[t["qualified"] for t in self.list_tools()],
+            )
         if server_name == "":
             return err(
                 f"ambiguous tool {tool!r}; qualify as <server>.{tool}",
                 code="ambiguous",
-                candidates=[
-                    s.name for s in self.servers.values() if tool in s.tools
-                ],
+                candidates=[s.name for s in self.servers.values() if tool in s.tools],
             )
         srv = self.servers.get(server_name or "")
         if srv is None:
-            return err(f"unknown server: {server_name!r}",
-                       code="unknown_server",
-                       available=list(self.servers))
+            return err(
+                f"unknown server: {server_name!r}",
+                code="unknown_server",
+                available=list(self.servers),
+            )
         return await srv.dispatch(tool_name or "", args)
 
 
@@ -112,8 +116,7 @@ class Router:
 _singleton: Optional[Router] = None
 
 
-def get_router(config_path: Optional[Path] = None,
-               reload: bool = False) -> Router:
+def get_router(config_path: Optional[Path] = None, reload: bool = False) -> Router:
     global _singleton
     if _singleton is None or reload:
         path = Path(config_path) if config_path else DEFAULT_CONFIG
@@ -138,8 +141,7 @@ def _main() -> None:  # pragma: no cover
     sub.add_parser("list", help="List all available tools")
     p_call = sub.add_parser("call", help="Invoke a tool")
     p_call.add_argument("tool")
-    p_call.add_argument("--args", default="{}",
-                        help="JSON object of arguments")
+    p_call.add_argument("--args", default="{}", help="JSON object of arguments")
     args = parser.parse_args()
 
     router = get_router()

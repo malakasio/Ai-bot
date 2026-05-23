@@ -47,15 +47,11 @@ def _allowlist() -> list[str]:
 
 
 def _allow_private() -> bool:
-    return os.environ.get("JARVIS_NET_ALLOW_PRIVATE", "false").lower() in {
-        "1", "true", "yes", "on"
-    }
+    return os.environ.get("JARVIS_NET_ALLOW_PRIVATE", "false").lower() in {"1", "true", "yes", "on"}
 
 
 def _lab_mode() -> bool:
-    return os.environ.get("JARVIS_LAB_MODE", "false").lower() in {
-        "1", "true", "yes", "on"
-    }
+    return os.environ.get("JARVIS_LAB_MODE", "false").lower() in {"1", "true", "yes", "on"}
 
 
 def _is_private_or_loopback(host: str) -> bool:
@@ -108,14 +104,17 @@ def _max_body() -> int:
 # ─── HTTP ─────────────────────────────────────────────────────────────────
 
 
-async def _http(method: str, url: str, *,
-                headers: Optional[dict[str, str]] = None,
-                json_body: Optional[dict[str, Any]] = None,
-                timeout: float = 15.0) -> dict[str, Any]:
+async def _http(
+    method: str,
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    json_body: Optional[dict[str, Any]] = None,
+    timeout: float = 15.0,
+) -> dict[str, Any]:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
-        return err(f"only http/https supported; got {parsed.scheme!r}",
-                   code="bad_scheme")
+        return err(f"only http/https supported; got {parsed.scheme!r}", code="bad_scheme")
     host = parsed.hostname or ""
     deny = _check_target(host)
     if deny:
@@ -128,23 +127,24 @@ async def _http(method: str, url: str, *,
 
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
-            resp = await c.request(method, url, headers=headers or {},
-                                   json=json_body)
+            resp = await c.request(method, url, headers=headers or {}, json=json_body)
         body = resp.content
         truncated = len(body) > _max_body()
-        sample = body[:_max_body()]
+        sample = body[: _max_body()]
         try:
             text = sample.decode(resp.encoding or "utf-8", errors="replace")
         except (LookupError, UnicodeDecodeError):
             text = sample.decode("utf-8", errors="replace")
-        return ok({
-            "url": str(resp.url),
-            "status": resp.status_code,
-            "headers": dict(resp.headers),
-            "body": text,
-            "body_bytes": len(body),
-            "truncated": truncated,
-        })
+        return ok(
+            {
+                "url": str(resp.url),
+                "status": resp.status_code,
+                "headers": dict(resp.headers),
+                "body": text,
+                "body_bytes": len(body),
+                "truncated": truncated,
+            }
+        )
     except Exception as e:
         return err(f"http {method} failed: {e!r}", code="http_error")
 
@@ -191,8 +191,7 @@ async def http_post(args: dict[str, Any]) -> dict[str, Any]:
     headers = args.get("headers") or {}
     require(isinstance(headers, dict), "headers must be an object")
     timeout = float(args.get("timeout_s", 30.0))
-    return await _http("POST", url, headers=headers, json_body=body,
-                       timeout=timeout)
+    return await _http("POST", url, headers=headers, json_body=body, timeout=timeout)
 
 
 # ─── ICMP / DNS / TCP ─────────────────────────────────────────────────────
@@ -212,33 +211,38 @@ async def http_post(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def ping(args: dict[str, Any]) -> dict[str, Any]:
-    host = require_str(args["host"], "host", max_len=253,
-                       pattern=r"[A-Za-z0-9:._\-]+")
+    host = require_str(args["host"], "host", max_len=253, pattern=r"[A-Za-z0-9:._\-]+")
     deny = _check_target(host)
     if deny:
         return err(deny, code="target_denied")
     count = require_int(int(args.get("count", 3)), "count", lo=1, hi=10)
-    timeout = require_int(int(args.get("timeout_s", 5)), "timeout_s",
-                          lo=1, hi=30)
+    timeout = require_int(int(args.get("timeout_s", 5)), "timeout_s", lo=1, hi=30)
     binary = shutil.which("ping")
     if not binary:
         return err("ping binary not found", code="missing_binary")
     proc = await asyncio.create_subprocess_exec(
-        binary, "-c", str(count), "-W", str(timeout), host,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        binary,
+        "-c",
+        str(count),
+        "-W",
+        str(timeout),
+        host,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(),
-                                                timeout=timeout * count + 5)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout * count + 5)
     except asyncio.TimeoutError:
         proc.kill()
         return err("ping timed out", code="timeout")
-    return ok({
-        "host": host,
-        "exit": proc.returncode,
-        "stdout": safe_truncate(stdout.decode("utf-8", "replace"), 8192),
-        "stderr": safe_truncate(stderr.decode("utf-8", "replace"), 2048),
-    })
+    return ok(
+        {
+            "host": host,
+            "exit": proc.returncode,
+            "stdout": safe_truncate(stdout.decode("utf-8", "replace"), 8192),
+            "stderr": safe_truncate(stderr.decode("utf-8", "replace"), 2048),
+        }
+    )
 
 
 @server.tool(
@@ -251,8 +255,7 @@ async def ping(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def resolve(args: dict[str, Any]) -> dict[str, Any]:
-    host = require_str(args["host"], "host", max_len=253,
-                       pattern=r"[A-Za-z0-9:._\-]+")
+    host = require_str(args["host"], "host", max_len=253, pattern=r"[A-Za-z0-9:._\-]+")
     loop = asyncio.get_event_loop()
     try:
         infos = await loop.getaddrinfo(host, None)
@@ -276,8 +279,7 @@ async def resolve(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def port_check(args: dict[str, Any]) -> dict[str, Any]:
-    host = require_str(args["host"], "host", max_len=253,
-                       pattern=r"[A-Za-z0-9:._\-]+")
+    host = require_str(args["host"], "host", max_len=253, pattern=r"[A-Za-z0-9:._\-]+")
     deny = _check_target(host)
     if deny:
         return err(deny, code="target_denied")
@@ -300,8 +302,19 @@ async def port_check(args: dict[str, Any]) -> dict[str, Any]:
 
 
 _NMAP_ALLOWED_FLAGS = {
-    "-sV", "-sS", "-sT", "-sU", "-Pn", "-A", "-T3", "-T4",
-    "-O", "--top-ports", "-p", "-oX", "-oN",
+    "-sV",
+    "-sS",
+    "-sT",
+    "-sU",
+    "-Pn",
+    "-A",
+    "-T3",
+    "-T4",
+    "-O",
+    "--top-ports",
+    "-p",
+    "-oX",
+    "-oN",
 }
 
 
@@ -338,37 +351,39 @@ async def nmap_scan(args: dict[str, Any]) -> dict[str, Any]:
     binary = shutil.which("nmap")
     if not binary:
         return err("nmap binary not found", code="missing_binary")
-    target = require_str(args["target"], "target", max_len=253,
-                         pattern=r"[A-Za-z0-9:._\-/]+")
+    target = require_str(args["target"], "target", max_len=253, pattern=r"[A-Za-z0-9:._\-/]+")
     deny = _check_target(target.split("/", 1)[0])  # strip CIDR
     if deny:
         return err(deny, code="target_denied")
     flags = args.get("flags") or ["-sV", "-T4", "-Pn"]
-    require(isinstance(flags, list) and all(isinstance(f, str) for f in flags),
-            "flags must be a list of strings")
+    require(
+        isinstance(flags, list) and all(isinstance(f, str) for f in flags),
+        "flags must be a list of strings",
+    )
     bad = _validate_nmap_args(flags)
     if bad:
         return err(bad, code="bad_flag")
-    timeout = require_int(int(args.get("timeout_s", 120)), "timeout_s",
-                          lo=5, hi=600)
+    timeout = require_int(int(args.get("timeout_s", 120)), "timeout_s", lo=5, hi=600)
     cmd = [binary, *flags, target]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(),
-                                                timeout=timeout)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         proc.kill()
         return err("nmap timed out", code="timeout", timeout_s=timeout)
-    return ok({
-        "target": target,
-        "cmd": cmd,
-        "exit": proc.returncode,
-        "stdout": safe_truncate(stdout.decode("utf-8", "replace"), 65536),
-        "stderr": safe_truncate(stderr.decode("utf-8", "replace"), 4096),
-    })
+    return ok(
+        {
+            "target": target,
+            "cmd": cmd,
+            "exit": proc.returncode,
+            "stdout": safe_truncate(stdout.decode("utf-8", "replace"), 65536),
+            "stderr": safe_truncate(stderr.decode("utf-8", "replace"), 4096),
+        }
+    )
 
 
 # ─── Module entry ─────────────────────────────────────────────────────────

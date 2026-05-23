@@ -21,11 +21,12 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 # ─── Load .env at import time ─────────────────────────────────────────────
 try:
     from dotenv import load_dotenv as _load_dotenv
+
     _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
     if _ENV_FILE.is_file():
         _load_dotenv(_ENV_FILE, override=False)
@@ -78,8 +79,7 @@ async def init() -> "asyncpg.Pool":
     """Initialize (or return the existing) pool. Safe to call repeatedly."""
     if asyncpg is None:
         raise RuntimeError(
-            "asyncpg is not installed; "
-            f"pip install asyncpg pgvector ({_ASYNCPG_IMPORT_ERROR})"
+            f"asyncpg is not installed; pip install asyncpg pgvector ({_ASYNCPG_IMPORT_ERROR})"
         )
     global _pool
     async with _pool_lock:
@@ -186,12 +186,18 @@ def init_schema_sync(sql_path: str | os.PathLike[str] | None = None) -> None:
     if url:
         cmd.extend(["-d", url])
     else:
-        cmd.extend([
-            "-h", os.environ.get("POSTGRES_HOST", "localhost"),
-            "-p", os.environ.get("POSTGRES_PORT", "5432"),
-            "-U", os.environ.get("POSTGRES_USER", "jarvis"),
-            "-d", os.environ.get("POSTGRES_DB", "jarvis"),
-        ])
+        cmd.extend(
+            [
+                "-h",
+                os.environ.get("POSTGRES_HOST", "localhost"),
+                "-p",
+                os.environ.get("POSTGRES_PORT", "5432"),
+                "-U",
+                os.environ.get("POSTGRES_USER", "jarvis"),
+                "-d",
+                os.environ.get("POSTGRES_DB", "jarvis"),
+            ]
+        )
     cmd.extend(["-v", "ON_ERROR_STOP=1", "-f", str(sql)])
     env = os.environ.copy()
     if "POSTGRES_PASSWORD" in env:

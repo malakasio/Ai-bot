@@ -18,6 +18,7 @@ Self-healing:
 - Score 70-85: Accept with improvement notes
 - Score > 85: Accept
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +34,7 @@ from uuid import UUID
 @dataclass
 class ValidationResult:
     """Result of validation pipeline."""
+
     score: int  # 0-100
     passed: bool  # score >= 70
 
@@ -68,7 +70,7 @@ class ValidationPipeline:
         task_id: UUID,
         files_changed: list[str],
         commits: list[str],
-        requirements: Optional[dict] = None
+        requirements: Optional[dict] = None,
     ) -> ValidationResult:
         """
         Run full validation pipeline.
@@ -83,6 +85,7 @@ class ValidationPipeline:
             ValidationResult with score and detailed breakdown
         """
         import time
+
         start_ms = int(time.time() * 1000)
 
         # Run all checks in parallel
@@ -98,21 +101,22 @@ class ValidationPipeline:
 
         # Calculate scores
         correctness_score = self._score_correctness(syntax_result, tests_result)
-        completeness_score = self._score_completeness(
-            tests_result, files_changed, requirements
-        )
+        completeness_score = self._score_completeness(tests_result, files_changed, requirements)
         efficiency_score = self._score_efficiency(logs_result, tests_result)
         safety_score = self._score_safety(security_result, logs_result)
 
-        total_score = (
-            correctness_score + completeness_score +
-            efficiency_score + safety_score
-        )
+        total_score = correctness_score + completeness_score + efficiency_score + safety_score
 
         # Generate feedback
         feedback = self._generate_feedback(
-            syntax_result, tests_result, security_result, logs_result,
-            correctness_score, completeness_score, efficiency_score, safety_score
+            syntax_result,
+            tests_result,
+            security_result,
+            logs_result,
+            correctness_score,
+            completeness_score,
+            efficiency_score,
+            safety_score,
         )
 
         duration_ms = int(time.time() * 1000) - start_ms
@@ -130,7 +134,7 @@ class ValidationPipeline:
             logs=logs_result,
             feedback=feedback,
             duration_ms=duration_ms,
-            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         )
 
     async def _check_syntax(self, files_changed: list[str]) -> dict:
@@ -138,9 +142,9 @@ class ValidationPipeline:
         errors = []
 
         # Group files by type
-        py_files = [f for f in files_changed if f.endswith('.py')]
-        ts_files = [f for f in files_changed if f.endswith(('.ts', '.tsx'))]
-        sh_files = [f for f in files_changed if f.endswith('.sh')]
+        py_files = [f for f in files_changed if f.endswith(".py")]
+        ts_files = [f for f in files_changed if f.endswith((".ts", ".tsx"))]
+        sh_files = [f for f in files_changed if f.endswith(".sh")]
 
         # Check Python with ruff
         if py_files:
@@ -150,44 +154,51 @@ class ValidationPipeline:
                     continue
 
                 proc = await asyncio.create_subprocess_exec(
-                    "ruff", "check", str(file_path),
+                    "ruff",
+                    "check",
+                    str(file_path),
                     cwd=self.worktree_path,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await proc.communicate()
 
                 if proc.returncode != 0:
                     # Parse ruff output
-                    for line in stdout.decode().split('\n'):
-                        if ':' in line and py_file in line:
-                            errors.append({
-                                "file": py_file,
-                                "line": self._extract_line_number(line),
-                                "message": line.strip()
-                            })
+                    for line in stdout.decode().split("\n"):
+                        if ":" in line and py_file in line:
+                            errors.append(
+                                {
+                                    "file": py_file,
+                                    "line": self._extract_line_number(line),
+                                    "message": line.strip(),
+                                }
+                            )
 
         # Check TypeScript with tsc
         if ts_files:
             tsconfig = self.worktree_path / "tsconfig.json"
             if tsconfig.exists():
                 proc = await asyncio.create_subprocess_exec(
-                    "tsc", "--noEmit",
+                    "tsc",
+                    "--noEmit",
                     cwd=self.worktree_path,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await proc.communicate()
 
                 if proc.returncode != 0:
-                    for line in stdout.decode().split('\n'):
+                    for line in stdout.decode().split("\n"):
                         for ts_file in ts_files:
                             if ts_file in line:
-                                errors.append({
-                                    "file": ts_file,
-                                    "line": self._extract_line_number(line),
-                                    "message": line.strip()
-                                })
+                                errors.append(
+                                    {
+                                        "file": ts_file,
+                                        "line": self._extract_line_number(line),
+                                        "message": line.strip(),
+                                    }
+                                )
                                 break
 
         # Check shell scripts with shellcheck
@@ -198,10 +209,13 @@ class ValidationPipeline:
                     continue
 
                 proc = await asyncio.create_subprocess_exec(
-                    "shellcheck", "-f", "json", str(file_path),
+                    "shellcheck",
+                    "-f",
+                    "json",
+                    str(file_path),
                     cwd=self.worktree_path,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await proc.communicate()
 
@@ -209,25 +223,28 @@ class ValidationPipeline:
                     try:
                         issues = json.loads(stdout.decode())
                         for issue in issues:
-                            errors.append({
-                                "file": sh_file,
-                                "line": issue.get("line", 0),
-                                "message": issue.get("message", "")
-                            })
+                            errors.append(
+                                {
+                                    "file": sh_file,
+                                    "line": issue.get("line", 0),
+                                    "message": issue.get("message", ""),
+                                }
+                            )
                     except json.JSONDecodeError:
                         pass
 
         return {
             "passed": len(errors) == 0,
             "errors": errors,
-            "files_checked": len(py_files) + len(ts_files) + len(sh_files)
+            "files_checked": len(py_files) + len(ts_files) + len(sh_files),
         }
 
     async def _run_tests(self) -> dict:
         """Run project test suite."""
         # Detect test framework
-        if (self.worktree_path / "pytest.ini").exists() or \
-           (self.worktree_path / "pyproject.toml").exists():
+        if (self.worktree_path / "pytest.ini").exists() or (
+            self.worktree_path / "pyproject.toml"
+        ).exists():
             return await self._run_pytest()
         elif (self.worktree_path / "package.json").exists():
             return await self._run_jest()
@@ -238,17 +255,20 @@ class ValidationPipeline:
                 "total": 0,
                 "failed": [],
                 "output": "No test framework detected",
-                "skipped": True
+                "skipped": True,
             }
 
     async def _run_pytest(self) -> dict:
         """Run pytest and parse results."""
         proc = await asyncio.create_subprocess_exec(
-            "pytest", "-v", "--tb=short", "--color=no",
+            "pytest",
+            "-v",
+            "--tb=short",
+            "--color=no",
             cwd=self.worktree_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
         stdout, stderr = await proc.communicate()
 
@@ -259,22 +279,22 @@ class ValidationPipeline:
         failed = []
         total = 0
 
-        for line in output.split('\n'):
-            if ' PASSED' in line:
+        for line in output.split("\n"):
+            if " PASSED" in line:
                 passed += 1
                 total += 1
-            elif ' FAILED' in line:
+            elif " FAILED" in line:
                 total += 1
                 # Extract test name
-                test_name = line.split(' FAILED')[0].strip()
+                test_name = line.split(" FAILED")[0].strip()
                 failed.append(test_name)
 
         # Also check summary line
-        summary_match = re.search(r'(\d+) passed', output)
+        summary_match = re.search(r"(\d+) passed", output)
         if summary_match:
             passed = int(summary_match.group(1))
 
-        failed_match = re.search(r'(\d+) failed', output)
+        failed_match = re.search(r"(\d+) failed", output)
         if failed_match:
             failed_count = int(failed_match.group(1))
             total = passed + failed_count
@@ -284,16 +304,20 @@ class ValidationPipeline:
             "total": total,
             "failed": failed,
             "output": output[-2000:],  # Last 2000 chars
-            "skipped": False
+            "skipped": False,
         }
 
     async def _run_jest(self) -> dict:
         """Run jest and parse results."""
         proc = await asyncio.create_subprocess_exec(
-            "npm", "test", "--", "--ci", "--json",
+            "npm",
+            "test",
+            "--",
+            "--ci",
+            "--json",
             cwd=self.worktree_path,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
@@ -313,7 +337,7 @@ class ValidationPipeline:
                 "total": total,
                 "failed": failed,
                 "output": json.dumps(result, indent=2)[-2000:],
-                "skipped": False
+                "skipped": False,
             }
         except json.JSONDecodeError:
             return {
@@ -321,14 +345,14 @@ class ValidationPipeline:
                 "total": 0,
                 "failed": [],
                 "output": stdout.decode()[-2000:],
-                "skipped": False
+                "skipped": False,
             }
 
     async def _check_security(self, files_changed: list[str]) -> dict:
         """Run security checks."""
         issues = []
 
-        py_files = [f for f in files_changed if f.endswith('.py')]
+        py_files = [f for f in files_changed if f.endswith(".py")]
 
         # Run bandit on Python files
         if py_files:
@@ -338,22 +362,27 @@ class ValidationPipeline:
                     continue
 
                 proc = await asyncio.create_subprocess_exec(
-                    "bandit", "-f", "json", str(file_path),
+                    "bandit",
+                    "-f",
+                    "json",
+                    str(file_path),
                     cwd=self.worktree_path,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await proc.communicate()
 
                 try:
                     result = json.loads(stdout.decode())
                     for issue in result.get("results", []):
-                        issues.append({
-                            "severity": issue.get("issue_severity", "UNKNOWN"),
-                            "file": py_file,
-                            "line": issue.get("line_number", 0),
-                            "message": issue.get("issue_text", "")
-                        })
+                        issues.append(
+                            {
+                                "severity": issue.get("issue_severity", "UNKNOWN"),
+                                "file": py_file,
+                                "line": issue.get("line_number", 0),
+                                "message": issue.get("issue_text", ""),
+                            }
+                        )
                 except json.JSONDecodeError:
                     pass
 
@@ -363,12 +392,12 @@ class ValidationPipeline:
             (r'(?i)(secret[_-]?key|secretkey)\s*[:=]\s*["\']([^"\']+)["\']', "Secret key"),
             (r'(?i)(password|passwd|pwd)\s*[:=]\s*["\']([^"\']+)["\']', "Password"),
             (r'(?i)(token)\s*[:=]\s*["\']([^"\']+)["\']', "Token"),
-            (r'-----BEGIN (RSA |DSA )?PRIVATE KEY-----', "Private key"),
+            (r"-----BEGIN (RSA |DSA )?PRIVATE KEY-----", "Private key"),
         ]
 
         for file_path_str in files_changed:
             file_path = self.worktree_path / file_path_str
-            if not file_path.exists() or file_path.suffix in ['.pyc', '.so', '.o']:
+            if not file_path.exists() or file_path.suffix in [".pyc", ".so", ".o"]:
                 continue
 
             try:
@@ -377,29 +406,28 @@ class ValidationPipeline:
                     matches = re.finditer(pattern, content)
                     for match in matches:
                         # Skip if in .env.example or comments
-                        if '.example' in file_path_str or file_path_str.startswith('#'):
+                        if ".example" in file_path_str or file_path_str.startswith("#"):
                             continue
 
-                        line_num = content[:match.start()].count('\n') + 1
-                        issues.append({
-                            "severity": "HIGH",
-                            "file": file_path_str,
-                            "line": line_num,
-                            "message": f"Possible {secret_type} in plaintext"
-                        })
+                        line_num = content[: match.start()].count("\n") + 1
+                        issues.append(
+                            {
+                                "severity": "HIGH",
+                                "file": file_path_str,
+                                "line": line_num,
+                                "message": f"Possible {secret_type} in plaintext",
+                            }
+                        )
             except (UnicodeDecodeError, PermissionError):
                 pass
 
         # Filter out LOW severity issues
-        high_medium_issues = [
-            i for i in issues
-            if i["severity"] in ["HIGH", "MEDIUM"]
-        ]
+        high_medium_issues = [i for i in issues if i["severity"] in ["HIGH", "MEDIUM"]]
 
         return {
             "passed": len(high_medium_issues) == 0,
             "issues": high_medium_issues,
-            "total_scanned": len(files_changed)
+            "total_scanned": len(files_changed),
         }
 
     async def _analyze_logs(self) -> dict:
@@ -408,38 +436,41 @@ class ValidationPipeline:
 
         # Check recent git log for error indicators
         proc = await asyncio.create_subprocess_exec(
-            "git", "log", "-10", "--oneline",
+            "git",
+            "log",
+            "-10",
+            "--oneline",
             cwd=self.worktree_path,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
 
         log_content = stdout.decode()
 
         # Count error/warning indicators in commit messages
-        error_count = len(re.findall(r'(?i)(error|fail|broke|broken)', log_content))
-        warning_count = len(re.findall(r'(?i)(warning|warn|todo|fixme)', log_content))
+        error_count = len(re.findall(r"(?i)(error|fail|broke|broken)", log_content))
+        warning_count = len(re.findall(r"(?i)(warning|warn|todo|fixme)", log_content))
 
         if error_count > 0:
-            patterns.append({
-                "level": "error",
-                "message": "Error-related terms in commit messages",
-                "count": error_count
-            })
+            patterns.append(
+                {
+                    "level": "error",
+                    "message": "Error-related terms in commit messages",
+                    "count": error_count,
+                }
+            )
 
         if warning_count > 0:
-            patterns.append({
-                "level": "warning",
-                "message": "Warning-related terms in commit messages",
-                "count": warning_count
-            })
+            patterns.append(
+                {
+                    "level": "warning",
+                    "message": "Warning-related terms in commit messages",
+                    "count": warning_count,
+                }
+            )
 
-        return {
-            "errors": error_count,
-            "warnings": warning_count,
-            "patterns": patterns
-        }
+        return {"errors": error_count, "warnings": warning_count, "patterns": patterns}
 
     def _score_correctness(self, syntax: dict, tests: dict) -> int:
         """Score correctness (0-40)."""
@@ -462,26 +493,20 @@ class ValidationPipeline:
         return max(0, score)
 
     def _score_completeness(
-        self,
-        tests: dict,
-        files_changed: list[str],
-        requirements: Optional[dict]
+        self, tests: dict, files_changed: list[str], requirements: Optional[dict]
     ) -> int:
         """Score completeness (0-30)."""
         score = 30
 
         # No tests written: -15 points
         if tests.get("skipped", False) or tests.get("total", 0) == 0:
-            if any(f.endswith('.py') for f in files_changed):
+            if any(f.endswith(".py") for f in files_changed):
                 score -= 15
 
         # Check if requirements met (if provided)
         if requirements:
             expected_files = requirements.get("files", [])
-            missing_files = [
-                f for f in expected_files
-                if f not in files_changed
-            ]
+            missing_files = [f for f in expected_files if f not in files_changed]
             if missing_files:
                 score -= min(15, len(missing_files) * 5)
 
@@ -509,10 +534,7 @@ class ValidationPipeline:
 
         # Security issues: -10 points
         if not security["passed"]:
-            high_issues = [
-                i for i in security["issues"]
-                if i["severity"] == "HIGH"
-            ]
+            high_issues = [i for i in security["issues"] if i["severity"] == "HIGH"]
             if high_issues:
                 score = 0
             else:
@@ -533,7 +555,7 @@ class ValidationPipeline:
         correctness: int,
         completeness: int,
         efficiency: int,
-        safety: int
+        safety: int,
     ) -> list[str]:
         """Generate actionable feedback for agent."""
         feedback = []
@@ -542,17 +564,14 @@ class ValidationPipeline:
         if correctness < 30:
             if not syntax["passed"]:
                 feedback.append(
-                    f"Fix {len(syntax['errors'])} syntax error(s): " +
-                    ", ".join(f"{e['file']}:{e['line']}" for e in syntax['errors'][:3])
+                    f"Fix {len(syntax['errors'])} syntax error(s): "
+                    + ", ".join(f"{e['file']}:{e['line']}" for e in syntax["errors"][:3])
                 )
 
             if not tests.get("skipped", False):
                 failed = tests.get("failed", [])
                 if failed:
-                    feedback.append(
-                        f"Fix {len(failed)} failing test(s): " +
-                        ", ".join(failed[:3])
-                    )
+                    feedback.append(f"Fix {len(failed)} failing test(s): " + ", ".join(failed[:3]))
 
         # Completeness feedback
         if completeness < 20:
@@ -567,14 +586,11 @@ class ValidationPipeline:
         # Safety feedback
         if safety < 7:
             if not security["passed"]:
-                high_issues = [
-                    i for i in security["issues"]
-                    if i["severity"] == "HIGH"
-                ]
+                high_issues = [i for i in security["issues"] if i["severity"] == "HIGH"]
                 if high_issues:
                     feedback.append(
-                        f"CRITICAL: Fix {len(high_issues)} high-severity security issue(s): " +
-                        ", ".join(f"{i['file']}:{i['line']}" for i in high_issues[:2])
+                        f"CRITICAL: Fix {len(high_issues)} high-severity security issue(s): "
+                        + ", ".join(f"{i['file']}:{i['line']}" for i in high_issues[:2])
                     )
                 else:
                     feedback.append("Address security issues detected by scanner")
@@ -586,7 +602,7 @@ class ValidationPipeline:
 
     def _extract_line_number(self, line: str) -> int:
         """Extract line number from error message."""
-        match = re.search(r':(\d+):', line)
+        match = re.search(r":(\d+):", line)
         if match:
             return int(match.group(1))
         return 0

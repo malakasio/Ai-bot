@@ -7,9 +7,9 @@ Tests the complete flow:
 4. Integration with main.py and voice/pipeline.py
 5. KAIROS autoDream consolidation
 """
+
 import os
 import pytest
-import asyncio
 from datetime import datetime, timezone
 
 
@@ -77,11 +77,7 @@ async def test_semantic_search_with_real_embedding():
     query_embedding = await embed_text("test query")
     assert len(query_embedding) == 384
 
-    matches = await semantic_search(
-        embedding=query_embedding,
-        limit=10,
-        min_confidence=0.0
-    )
+    matches = await semantic_search(embedding=query_embedding, limit=10, min_confidence=0.0)
 
     assert isinstance(matches, list)
     # May be empty if no semantic memory exists yet
@@ -101,6 +97,7 @@ async def test_kairos_embed_uses_real_embeddings():
 
     # Real embeddings are normalized (L2 norm ≈ 1.0)
     import math
+
     norm = math.sqrt(sum(x * x for x in embedding))
     assert 0.99 < norm < 1.01, f"Expected normalized vector, got norm={norm}"
 
@@ -140,17 +137,14 @@ async def test_upsert_and_retrieve_semantic_memory():
         content=test_content,
         embedding=test_embedding,
         confidence=0.9,
-        metadata={"test": True, "timestamp": datetime.now(timezone.utc).isoformat()}
+        metadata={"test": True, "timestamp": datetime.now(timezone.utc).isoformat()},
     )
 
     assert memory_id is not None
 
     # Retrieve
     matches = await semantic_search(
-        embedding=test_embedding,
-        limit=5,
-        kind="test",
-        min_confidence=0.8
+        embedding=test_embedding, limit=5, kind="test", min_confidence=0.8
     )
 
     # Should find our test entry
@@ -160,6 +154,7 @@ async def test_upsert_and_retrieve_semantic_memory():
 
     # Cleanup: delete test entry
     from core import database
+
     await database.execute(
         "DELETE FROM jarvis_semantic_memory WHERE kind = 'test' AND subject = 'integration-test'"
     )

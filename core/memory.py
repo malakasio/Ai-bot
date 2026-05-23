@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import socket
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime
 from typing import Any, Optional, Sequence
 from uuid import UUID
 
@@ -284,6 +282,7 @@ async def semantic_episodes(
     except Exception as e:
         # Fallback: return empty list on error, don't break caller
         import sys
+
         print(f"[semantic_episodes] Error: {e}", file=sys.stderr)
         return []
 
@@ -324,14 +323,15 @@ async def upsert_skill(
 
 
 async def record_skill_outcome(
-    name: str, success: bool, score: Optional[int] = None,
-    failure_mode: Optional[str] = None, lesson: Optional[str] = None,
+    name: str,
+    success: bool,
+    score: Optional[int] = None,
+    failure_mode: Optional[str] = None,
+    lesson: Optional[str] = None,
 ) -> None:
     """Update skill counters and (optionally) append a lesson."""
     async with await database.transaction() as conn:
-        skill = await conn.fetchrow(
-            "SELECT id FROM skills WHERE name = $1", name
-        )
+        skill = await conn.fetchrow("SELECT id FROM skills WHERE name = $1", name)
         if not skill:
             return
         if success:
@@ -352,7 +352,10 @@ async def record_skill_outcome(
                 INSERT INTO skill_lessons (skill_id, score, failure_mode, lesson)
                 VALUES ($1, $2, $3, $4)
                 """,
-                skill["id"], score, failure_mode, lesson or "",
+                skill["id"],
+                score,
+                failure_mode,
+                lesson or "",
             )
 
 
@@ -378,8 +381,13 @@ async def enqueue_task(
         VALUES ($1, $2, $3::jsonb, $4, COALESCE($5, now()), $6, $7)
         RETURNING id
         """,
-        kind, target, json.dumps(payload or {}), priority,
-        scheduled_for, notify, max_attempts,
+        kind,
+        target,
+        json.dumps(payload or {}),
+        priority,
+        scheduled_for,
+        notify,
+        max_attempts,
     )
     return row["id"]
 
@@ -452,7 +460,8 @@ async def claim_next_task(worker_id: Optional[str] = None) -> Optional[QueuedTas
                 attempts = attempts + 1
             WHERE id = $1
             """,
-            row["id"], worker,
+            row["id"],
+            worker,
         )
         payload = row["payload"]
         if isinstance(payload, str):
@@ -471,7 +480,9 @@ async def claim_next_task(worker_id: Optional[str] = None) -> Optional[QueuedTas
 
 
 async def complete_task(
-    task_id: UUID, result: Optional[dict] = None, error: Optional[str] = None,
+    task_id: UUID,
+    result: Optional[dict] = None,
+    error: Optional[str] = None,
 ) -> None:
     """Mark a claimed task done or failed."""
     if error is None:
@@ -482,7 +493,8 @@ async def complete_task(
                 locked_by = NULL, locked_at = NULL
             WHERE id = $1
             """,
-            task_id, json.dumps(result or {}),
+            task_id,
+            json.dumps(result or {}),
         )
     else:
         # Failed but retryable? Re-queue if attempts < max_attempts.
@@ -501,5 +513,6 @@ async def complete_task(
                 locked_at = NULL
             WHERE id = $1
             """,
-            task_id, error,
+            task_id,
+            error,
         )

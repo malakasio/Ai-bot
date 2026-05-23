@@ -41,7 +41,6 @@ import re
 import shutil
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 
@@ -85,14 +84,15 @@ def _list_env(name: str) -> list[str]:
 def _get_logger():
     try:
         from . import agent as _agent
+
         return _agent.get_logger()
     except Exception:
         import logging
+
         log = logging.getLogger("jarvis.kairos")
         if not log.handlers:
             h = logging.StreamHandler()
-            h.setFormatter(logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+            h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
             log.addHandler(h)
             log.setLevel(logging.INFO)
         return log
@@ -102,22 +102,24 @@ async def _telegram(text: str) -> bool:
     """Send a Telegram notification via the agent helper if available."""
     try:
         from . import agent as _agent
+
         return await _agent.send_telegram_alert(text)
     except Exception:
         pass
     # Fallback: minimal httpx call.
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = (os.environ.get("TELEGRAM_USER_ID")
-               or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    chat_id = (
+        os.environ.get("TELEGRAM_USER_ID") or os.environ.get("TELEGRAM_CHAT_ID") or ""
+    ).strip()
     if not token or not chat_id:
         return False
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text,
-                      "disable_web_page_preview": True},
+                json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
             )
         return r.status_code == 200
     except Exception:
@@ -127,22 +129,36 @@ async def _telegram(text: str) -> bool:
 # ─── Episode helper (best-effort, never raises) ───────────────────────────
 
 
-async def _emit_episode(actor: str, tool: str, *, input_: str = "",
-                        output: str = "", exit_code: int = 0,
-                        zone: str = "green", score: Optional[int] = None,
-                        metadata: Optional[dict[str, Any]] = None) -> None:
+async def _emit_episode(
+    actor: str,
+    tool: str,
+    *,
+    input_: str = "",
+    output: str = "",
+    exit_code: int = 0,
+    zone: str = "green",
+    score: Optional[int] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
     if _bool_env("KAIROS_DRY_RUN", False):
         return
     try:
         from . import memory
-        await memory.store_episode(memory.Episode(
-            actor=actor, tool=tool, input=input_, output=output,
-            exit_code=exit_code, zone=zone, score=score,
-            metadata=metadata or {},
-        ))
+
+        await memory.store_episode(
+            memory.Episode(
+                actor=actor,
+                tool=tool,
+                input=input_,
+                output=output,
+                exit_code=exit_code,
+                zone=zone,
+                score=score,
+                metadata=metadata or {},
+            )
+        )
     except Exception as e:  # pragma: no cover
-        _get_logger().warning("kairos.episode.write_failed",
-                              extra={"exc": repr(e)})
+        _get_logger().warning("kairos.episode.write_failed", extra={"exc": repr(e)})
 
 
 # ─── 1) Task queue drain ──────────────────────────────────────────────────
@@ -178,27 +194,32 @@ async def _drain_task_queue(batch: int) -> dict[str, Any]:
         if task is None:
             break
         out["claimed"] += 1
-        log.info("kairos.task.claim", extra={
-            "task_id": str(task.id), "kind": task.kind, "target": task.target,
-            "attempt": task.attempts,
-        })
+        log.info(
+            "kairos.task.claim",
+            extra={
+                "task_id": str(task.id),
+                "kind": task.kind,
+                "target": task.target,
+                "attempt": task.attempts,
+            },
+        )
         handler = _TASK_HANDLERS.get(task.kind)
         if handler is None:
             out["skipped_no_handler"] += 1
             try:
-                await memory.complete_task(
-                    task.id, error=f"no handler for kind={task.kind}")
+                await memory.complete_task(task.id, error=f"no handler for kind={task.kind}")
             except Exception:
                 pass
             continue
         try:
             result = await handler(task.target, task.payload or {})
-            await memory.complete_task(task.id, result=result if isinstance(result, dict) else {"result": result})
+            await memory.complete_task(
+                task.id, result=result if isinstance(result, dict) else {"result": result}
+            )
             out["done"] += 1
         except Exception as e:
             out["failed"] += 1
-            log.warning("kairos.task.fail", extra={
-                "task_id": str(task.id), "exc": repr(e)})
+            log.warning("kairos.task.fail", extra={"task_id": str(task.id), "exc": repr(e)})
             try:
                 await memory.complete_task(task.id, error=repr(e))
             except Exception:
@@ -256,28 +277,34 @@ async def _poll_github() -> dict[str, Any]:
             sha = head.get("sha", "")
             prev = _LAST_SEEN_COMMIT.get(repo)
             entry = {
-                "repo": repo, "head": sha[:12],
-                "message": (head.get("commit") or {}).get("message", "")
-                              .splitlines()[0:1][0:1],
-                "author": ((head.get("commit") or {}).get("author") or {})
-                              .get("name", ""),
+                "repo": repo,
+                "head": sha[:12],
+                "message": (head.get("commit") or {}).get("message", "").splitlines()[0:1][0:1],
+                "author": ((head.get("commit") or {}).get("author") or {}).get("name", ""),
             }
             if prev and prev != sha:
                 entry["new_commit"] = True
                 await _telegram(
                     f"GitHub: {repo} new HEAD {sha[:12]} by "
                     f"{entry['author']}: "
-                    f"{(head.get('commit') or {}).get('message','')[:200]}"
+                    f"{(head.get('commit') or {}).get('message', '')[:200]}"
                 )
                 await _emit_episode(
-                    "kairos", "github.poll",
-                    input_=repo, output=f"new_head={sha[:12]}",
+                    "kairos",
+                    "github.poll",
+                    input_=repo,
+                    output=f"new_head={sha[:12]}",
                     metadata={"repo": repo, "sha": sha, "prev": prev},
                 )
             _LAST_SEEN_COMMIT[repo] = sha
-            log.info("kairos.github.head", extra={
-                "repo": repo, "sha": sha[:12], "new": prev != sha,
-            })
+            log.info(
+                "kairos.github.head",
+                extra={
+                    "repo": repo,
+                    "sha": sha[:12],
+                    "new": prev != sha,
+                },
+            )
             results.append(entry)
     return {"repos": results, "count": len(results)}
 
@@ -289,8 +316,7 @@ def _disk_usage(path: str = "/") -> dict[str, Any]:
     try:
         total, used, free = shutil.disk_usage(path)
         pct = (used / total * 100.0) if total else 0.0
-        return {"path": path, "total": total, "used": used,
-                "free": free, "pct": round(pct, 1)}
+        return {"path": path, "total": total, "used": used, "free": free, "pct": round(pct, 1)}
     except Exception as e:
         return {"path": path, "error": repr(e)}
 
@@ -315,8 +341,7 @@ def _mem_info() -> dict[str, Any]:
     total = info.get("MemTotal", 0)
     free = info.get("MemAvailable", info.get("MemFree", 0))
     pct = ((total - free) / total * 100.0) if total else 0.0
-    return {"available": True, "total_kb": total, "available_kb": free,
-            "pct": round(pct, 1)}
+    return {"available": True, "total_kb": total, "available_kb": free, "pct": round(pct, 1)}
 
 
 def _cpu_load() -> dict[str, Any]:
@@ -326,9 +351,14 @@ def _cpu_load() -> dict[str, Any]:
         return {"available": False, "error": repr(e)}
     cores = os.cpu_count() or 1
     pct = round(load1 / cores * 100.0, 1)
-    return {"available": True, "cores": cores,
-            "load1": load1, "load5": load5, "load15": load15,
-            "pct": pct}
+    return {
+        "available": True,
+        "cores": cores,
+        "load1": load1,
+        "load5": load5,
+        "load15": load15,
+        "pct": pct,
+    }
 
 
 async def _health_check() -> dict[str, Any]:
@@ -336,21 +366,26 @@ async def _health_check() -> dict[str, Any]:
     mem = _mem_info()
     cpu = _cpu_load()
     alerts: list[str] = []
-    if isinstance(disk.get("pct"), float) and \
-       disk["pct"] >= _int_env("KAIROS_HEALTH_DISK_PCT",
-                               DEFAULT_HEALTH_DISK_PCT):
+    if isinstance(disk.get("pct"), float) and disk["pct"] >= _int_env(
+        "KAIROS_HEALTH_DISK_PCT", DEFAULT_HEALTH_DISK_PCT
+    ):
         alerts.append(f"disk {disk['pct']}% used on /")
-    if mem.get("available") and mem.get("pct", 0) >= \
-       _int_env("KAIROS_HEALTH_MEM_PCT", DEFAULT_HEALTH_MEM_PCT):
+    if mem.get("available") and mem.get("pct", 0) >= _int_env(
+        "KAIROS_HEALTH_MEM_PCT", DEFAULT_HEALTH_MEM_PCT
+    ):
         alerts.append(f"memory {mem['pct']}% used")
-    if cpu.get("available") and cpu.get("pct", 0) >= \
-       _int_env("KAIROS_HEALTH_CPU_PCT", DEFAULT_HEALTH_CPU_PCT):
+    if cpu.get("available") and cpu.get("pct", 0) >= _int_env(
+        "KAIROS_HEALTH_CPU_PCT", DEFAULT_HEALTH_CPU_PCT
+    ):
         alerts.append(f"cpu load1 {cpu['pct']}% of {cpu['cores']} cores")
     if alerts:
         await _telegram("KAIROS health alert: " + "; ".join(alerts))
-        await _emit_episode("kairos", "health.alert",
-                            input_=";".join(alerts),
-                            metadata={"disk": disk, "mem": mem, "cpu": cpu})
+        await _emit_episode(
+            "kairos",
+            "health.alert",
+            input_=";".join(alerts),
+            metadata={"disk": disk, "mem": mem, "cpu": cpu},
+        )
     return {"disk": disk, "mem": mem, "cpu": cpu, "alerts": alerts}
 
 
@@ -359,12 +394,50 @@ async def _health_check() -> dict[str, Any]:
 
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}")
 _STOPWORDS = {
-    "this", "that", "with", "from", "into", "your", "have", "been",
-    "they", "them", "their", "there", "which", "would", "could", "should",
-    "about", "where", "when", "while", "what", "will", "shall", "than",
-    "then", "these", "those", "some", "such", "also", "only", "even",
-    "more", "most", "many", "much", "true", "false", "none", "null",
-    "user", "system", "input", "output",
+    "this",
+    "that",
+    "with",
+    "from",
+    "into",
+    "your",
+    "have",
+    "been",
+    "they",
+    "them",
+    "their",
+    "there",
+    "which",
+    "would",
+    "could",
+    "should",
+    "about",
+    "where",
+    "when",
+    "while",
+    "what",
+    "will",
+    "shall",
+    "than",
+    "then",
+    "these",
+    "those",
+    "some",
+    "such",
+    "also",
+    "only",
+    "even",
+    "more",
+    "most",
+    "many",
+    "much",
+    "true",
+    "false",
+    "none",
+    "null",
+    "user",
+    "system",
+    "input",
+    "output",
 }
 
 
@@ -382,7 +455,7 @@ def _embed_stub(text: str, dim: int = 384) -> list[float]:
     if not s:
         return buckets
     for i in range(len(s) - 2):
-        tri = s[i:i + 3]
+        tri = s[i : i + 3]
         h = int.from_bytes(hashlib.sha1(tri.encode()).digest()[:8], "big")
         idx = h % dim
         sign = 1.0 if (h >> 63) & 1 else -1.0
@@ -397,6 +470,7 @@ async def _embed(text: str) -> list[float]:
     """Get embedding for text. Uses real embeddings, falls back to stub."""
     try:
         from core.embeddings import embed_text
+
         return await embed_text(text)
     except Exception as e:
         log = _get_logger()
@@ -414,15 +488,17 @@ def extract_patterns(
     For now: token frequency by actor+tool combination, plus a count of
     successes vs failures per skill. Cheap, deterministic, no model.
     """
-    pair_tokens: dict[tuple[str, str], collections.Counter] = collections.defaultdict(collections.Counter)
+    pair_tokens: dict[tuple[str, str], collections.Counter] = collections.defaultdict(
+        collections.Counter
+    )
     outcomes: dict[str, dict[str, int]] = collections.defaultdict(
-        lambda: {"ok": 0, "fail": 0, "total": 0})
+        lambda: {"ok": 0, "fail": 0, "total": 0}
+    )
     for ep in episodes:
         actor = ep.get("actor") or ""
         tool = ep.get("tool") or ""
         if actor and tool:
-            text = " ".join(str(ep.get(k, "") or "") for k in
-                            ("input", "output", "failure_mode"))
+            text = " ".join(str(ep.get(k, "") or "") for k in ("input", "output", "failure_mode"))
             for tok in _WORD_RE.findall(text.lower()):
                 if tok in _STOPWORDS:
                     continue
@@ -439,23 +515,30 @@ def extract_patterns(
         for word, count in tokens.most_common(5):
             if count < min_count:
                 continue
-            patterns.append({
-                "kind": "co-occurrence",
-                "actor": actor, "tool": tool,
-                "term": word, "count": count,
-            })
+            patterns.append(
+                {
+                    "kind": "co-occurrence",
+                    "actor": actor,
+                    "tool": tool,
+                    "term": word,
+                    "count": count,
+                }
+            )
 
     for tool, b in outcomes.items():
         if b["total"] < min_count:
             continue
         rate = b["fail"] / b["total"] if b["total"] else 0.0
-        patterns.append({
-            "kind": "outcome-rate",
-            "tool": tool,
-            "total": b["total"],
-            "ok": b["ok"], "fail": b["fail"],
-            "fail_rate": round(rate, 3),
-        })
+        patterns.append(
+            {
+                "kind": "outcome-rate",
+                "tool": tool,
+                "total": b["total"],
+                "ok": b["ok"],
+                "fail": b["fail"],
+                "fail_rate": round(rate, 3),
+            }
+        )
     return patterns
 
 
@@ -469,15 +552,17 @@ async def auto_dream(
     Returns a structured summary: how many episodes, patterns, writes.
     Safe to call any time; honors KAIROS_DRY_RUN.
     """
-    lookback_h = lookback_hours or _int_env(
-        "DREAM_LOOKBACK_HOURS", DEFAULT_DREAM_LOOKBACK_HOURS)
-    cap = max_episodes or _int_env(
-        "DREAM_MAX_EPISODES", DEFAULT_DREAM_MAX_EPISODES)
+    lookback_h = lookback_hours or _int_env("DREAM_LOOKBACK_HOURS", DEFAULT_DREAM_LOOKBACK_HOURS)
+    cap = max_episodes or _int_env("DREAM_MAX_EPISODES", DEFAULT_DREAM_MAX_EPISODES)
     log = _get_logger()
 
     summary: dict[str, Any] = {
-        "lookback_hours": lookback_h, "max_episodes": cap,
-        "episodes_scanned": 0, "patterns": 0, "writes": 0, "errors": [],
+        "lookback_hours": lookback_h,
+        "max_episodes": cap,
+        "episodes_scanned": 0,
+        "patterns": 0,
+        "writes": 0,
+        "errors": [],
     }
     try:
         from . import memory
@@ -495,10 +580,14 @@ async def auto_dream(
 
     patterns = extract_patterns(episodes)
     summary["patterns"] = len(patterns)
-    log.info("kairos.dream.patterns", extra={
-        "count": len(patterns), "episodes": len(episodes),
-        "lookback_h": lookback_h,
-    })
+    log.info(
+        "kairos.dream.patterns",
+        extra={
+            "count": len(patterns),
+            "episodes": len(episodes),
+            "lookback_h": lookback_h,
+        },
+    )
 
     if _bool_env("KAIROS_DRY_RUN", False):
         summary["dry_run"] = True
@@ -523,9 +612,12 @@ async def auto_dream(
             summary["writes"] += 1
         except Exception as e:
             summary["errors"].append(f"upsert_failed: {e!r}")
-    await _emit_episode("kairos", "dream",
-                        output=f"patterns={summary['patterns']} writes={summary['writes']}",
-                        metadata=summary)
+    await _emit_episode(
+        "kairos",
+        "dream",
+        output=f"patterns={summary['patterns']} writes={summary['writes']}",
+        metadata=summary,
+    )
     return summary
 
 
@@ -536,6 +628,7 @@ async def _seconds_since_last_episode() -> Optional[float]:
     """How long since the last user/system episode landed."""
     try:
         from . import memory
+
         rows = await memory.recent_episodes(limit=1)
         if not rows:
             return None
@@ -553,22 +646,30 @@ async def _seconds_since_last_episode() -> Optional[float]:
 
 @dataclasses.dataclass
 class KairosConfig:
-    interval_s: int = dataclasses.field(default_factory=lambda: _int_env("KAIROS_INTERVAL", DEFAULT_INTERVAL_S))
-    task_batch: int = dataclasses.field(default_factory=lambda: _int_env("KAIROS_TASK_BATCH", DEFAULT_TASK_BATCH))
-    github_every_n: int = dataclasses.field(default_factory=lambda: _int_env("KAIROS_GITHUB_POLL_EVERY_N", DEFAULT_GITHUB_POLL_EVERY_N))
-    idle_threshold_s: int = dataclasses.field(default_factory=lambda: _int_env("DREAM_IDLE_THRESHOLD", DEFAULT_DREAM_IDLE_S))
+    interval_s: int = dataclasses.field(
+        default_factory=lambda: _int_env("KAIROS_INTERVAL", DEFAULT_INTERVAL_S)
+    )
+    task_batch: int = dataclasses.field(
+        default_factory=lambda: _int_env("KAIROS_TASK_BATCH", DEFAULT_TASK_BATCH)
+    )
+    github_every_n: int = dataclasses.field(
+        default_factory=lambda: _int_env("KAIROS_GITHUB_POLL_EVERY_N", DEFAULT_GITHUB_POLL_EVERY_N)
+    )
+    idle_threshold_s: int = dataclasses.field(
+        default_factory=lambda: _int_env("DREAM_IDLE_THRESHOLD", DEFAULT_DREAM_IDLE_S)
+    )
     dry_run: bool = dataclasses.field(default_factory=lambda: _bool_env("KAIROS_DRY_RUN", False))
 
 
 class Kairos:
     """KAIROS background scheduler.
 
-        kairos = Kairos()
-        await kairos.start()    # blocks forever
-        # or
-        task = asyncio.create_task(kairos.start())
-        ...
-        await kairos.stop()
+    kairos = Kairos()
+    await kairos.start()    # blocks forever
+    # or
+    task = asyncio.create_task(kairos.start())
+    ...
+    await kairos.stop()
     """
 
     def __init__(self, config: Optional[KairosConfig] = None) -> None:
@@ -587,8 +688,7 @@ class Kairos:
                     summary = await self.tick()
                     self.log.info("kairos.tick", extra=summary)
                 except Exception as e:  # pragma: no cover
-                    self.log.exception("kairos.tick.exception",
-                                       extra={"exc": repr(e)})
+                    self.log.exception("kairos.tick.exception", extra={"exc": repr(e)})
                 # Sleep until the next interval, honoring stop.
                 elapsed = time.monotonic() - t0
                 wait = max(1.0, self.cfg.interval_s - elapsed)
@@ -622,8 +722,10 @@ class Kairos:
         if idle is not None and idle >= self.cfg.idle_threshold_s:
             now = time.monotonic()
             # Don't dream more than once per idle_threshold window.
-            if (self._last_dream_at is None or
-                    now - self._last_dream_at >= self.cfg.idle_threshold_s):
+            if (
+                self._last_dream_at is None
+                or now - self._last_dream_at >= self.cfg.idle_threshold_s
+            ):
                 out["dream"] = await auto_dream()
                 self._last_dream_at = now
 
@@ -635,11 +737,10 @@ class Kairos:
 
 def main() -> None:  # pragma: no cover
     import argparse
+
     p = argparse.ArgumentParser(prog="core.kairos")
-    p.add_argument("--once", action="store_true",
-                   help="run a single tick and exit")
-    p.add_argument("--dream", action="store_true",
-                   help="run auto_dream() once and exit")
+    p.add_argument("--once", action="store_true", help="run a single tick and exit")
+    p.add_argument("--dream", action="store_true", help="run auto_dream() once and exit")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
     if args.dry_run:

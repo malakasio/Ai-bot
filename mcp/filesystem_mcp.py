@@ -21,11 +21,9 @@ from ._common import (
     err,
     ok,
     require,
-    require_dict,
     require_in,
     require_int,
     require_str,
-    safe_truncate,
 )
 
 
@@ -53,9 +51,13 @@ def _allowed_roots() -> list[Path]:
 
 
 _BLACK_PATTERNS = (
-    "/proc/", "/sys/",  # kernel surfaces
-    "/dev/sd", "/dev/nvme", "/dev/mmcblk",
-    "/.ssh/id_", "/.gnupg/private-keys",
+    "/proc/",
+    "/sys/",  # kernel surfaces
+    "/dev/sd",
+    "/dev/nvme",
+    "/dev/mmcblk",
+    "/.ssh/id_",
+    "/.gnupg/private-keys",
     "/boot/",
 )
 
@@ -79,13 +81,10 @@ def _validate_path(raw: str, *, must_exist: bool = False) -> Path:
             raise ValueError(f"black-listed suffix: {suf}")
 
     roots = _allowed_roots()
-    inside_allowed = any(
-        resolved == r or r in resolved.parents for r in roots
-    )
+    inside_allowed = any(resolved == r or r in resolved.parents for r in roots)
     if not inside_allowed:
         raise ValueError(
-            f"path outside JARVIS_FS_ALLOWED_ROOTS: {resolved} "
-            f"(roots: {[str(r) for r in roots]})"
+            f"path outside JARVIS_FS_ALLOWED_ROOTS: {resolved} (roots: {[str(r) for r in roots]})"
         )
 
     if must_exist:
@@ -114,10 +113,10 @@ def _max_bytes() -> int:
     },
 )
 async def read_file(args: dict[str, Any]) -> dict[str, Any]:
-    encoding = require_in(args.get("encoding", "utf-8"), "encoding",
-                          ["utf-8", "base64"])
-    cap = require_int(int(args.get("max_bytes", _max_bytes())),
-                      "max_bytes", lo=1, hi=64 * 1024 * 1024)
+    encoding = require_in(args.get("encoding", "utf-8"), "encoding", ["utf-8", "base64"])
+    cap = require_int(
+        int(args.get("max_bytes", _max_bytes())), "max_bytes", lo=1, hi=64 * 1024 * 1024
+    )
     try:
         path = _validate_path(args["path"], must_exist=True)
     except (KeyError, ValueError) as e:
@@ -126,27 +125,28 @@ async def read_file(args: dict[str, Any]) -> dict[str, Any]:
         return err(f"not a regular file: {path}", code="not_a_file")
     size = path.stat().st_size
     if size > cap:
-        return err(f"file too large: {size} > {cap}", code="too_large",
-                   size=size, max_bytes=cap)
+        return err(f"file too large: {size} > {cap}", code="too_large", size=size, max_bytes=cap)
     blob = path.read_bytes()
     if encoding == "utf-8":
         try:
             text = blob.decode("utf-8")
         except UnicodeDecodeError:
-            return err("file is not valid UTF-8; request encoding=base64",
-                       code="not_utf8")
-        return ok({"path": str(path), "size": size, "content": text,
-                   "encoding": "utf-8"})
-    return ok({"path": str(path), "size": size,
-               "content": base64.b64encode(blob).decode("ascii"),
-               "encoding": "base64"})
+            return err("file is not valid UTF-8; request encoding=base64", code="not_utf8")
+        return ok({"path": str(path), "size": size, "content": text, "encoding": "utf-8"})
+    return ok(
+        {
+            "path": str(path),
+            "size": size,
+            "content": base64.b64encode(blob).decode("ascii"),
+            "encoding": "base64",
+        }
+    )
 
 
 @server.tool(
     "write_file",
     description=(
-        "Write a file inside the allowed roots. Refuses to overwrite "
-        "unless overwrite=true."
+        "Write a file inside the allowed roots. Refuses to overwrite unless overwrite=true."
     ),
     input_schema={
         "type": "object",
@@ -161,8 +161,7 @@ async def read_file(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def write_file(args: dict[str, Any]) -> dict[str, Any]:
-    encoding = require_in(args.get("encoding", "utf-8"), "encoding",
-                          ["utf-8", "base64"])
+    encoding = require_in(args.get("encoding", "utf-8"), "encoding", ["utf-8", "base64"])
     overwrite = bool(args.get("overwrite", False))
     mode = int(args.get("mode", 0o644))
     content = args.get("content")
@@ -172,22 +171,23 @@ async def write_file(args: dict[str, Any]) -> dict[str, Any]:
     except (KeyError, ValueError) as e:
         return err(str(e), code="invalid_path")
     if path.exists() and not overwrite:
-        return err(f"refusing to overwrite: {path}", code="exists",
-                   path=str(path))
-    blob = (content.encode("utf-8") if encoding == "utf-8"
-            else base64.b64decode(content))
+        return err(f"refusing to overwrite: {path}", code="exists", path=str(path))
+    blob = content.encode("utf-8") if encoding == "utf-8" else base64.b64decode(content)
     cap = _max_bytes()
     if len(blob) > cap:
-        return err(f"payload too large: {len(blob)} > {cap}",
-                   code="too_large", size=len(blob), max_bytes=cap)
+        return err(
+            f"payload too large: {len(blob)} > {cap}",
+            code="too_large",
+            size=len(blob),
+            max_bytes=cap,
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(blob)
     try:
         os.chmod(path, mode)
     except OSError:
         pass
-    return ok({"path": str(path), "bytes_written": len(blob),
-               "overwrote": overwrite})
+    return ok({"path": str(path), "bytes_written": len(blob), "overwrote": overwrite})
 
 
 @server.tool(
@@ -216,14 +216,20 @@ async def list_dir(args: dict[str, Any]) -> dict[str, Any]:
             continue
         try:
             st = child.stat()
-            entries.append({
-                "name": child.name,
-                "kind": "dir" if child.is_dir() else
-                        "file" if child.is_file() else
-                        "symlink" if child.is_symlink() else "other",
-                "size": st.st_size,
-                "mtime": int(st.st_mtime),
-            })
+            entries.append(
+                {
+                    "name": child.name,
+                    "kind": "dir"
+                    if child.is_dir()
+                    else "file"
+                    if child.is_file()
+                    else "symlink"
+                    if child.is_symlink()
+                    else "other",
+                    "size": st.st_size,
+                    "mtime": int(st.st_mtime),
+                }
+            )
         except OSError:
             continue
     return ok({"path": str(path), "entries": entries, "count": len(entries)})
@@ -244,16 +250,22 @@ async def stat(args: dict[str, Any]) -> dict[str, Any]:
     except (KeyError, ValueError) as e:
         return err(str(e), code="invalid_path")
     st = path.stat()
-    return ok({
-        "path": str(path),
-        "kind": "dir" if path.is_dir() else
-                "file" if path.is_file() else
-                "symlink" if path.is_symlink() else "other",
-        "size": st.st_size,
-        "mode": oct(st.st_mode & 0o7777),
-        "mtime": int(st.st_mtime),
-        "ctime": int(st.st_ctime),
-    })
+    return ok(
+        {
+            "path": str(path),
+            "kind": "dir"
+            if path.is_dir()
+            else "file"
+            if path.is_file()
+            else "symlink"
+            if path.is_symlink()
+            else "other",
+            "size": st.st_size,
+            "mode": oct(st.st_mode & 0o7777),
+            "mtime": int(st.st_mtime),
+            "ctime": int(st.st_ctime),
+        }
+    )
 
 
 @server.tool(
@@ -277,12 +289,11 @@ async def delete(args: dict[str, Any]) -> dict[str, Any]:
     try:
         if path.is_dir():
             if not recursive:
-                return err("path is a directory; pass recursive=true",
-                           code="is_dir")
+                return err("path is a directory; pass recursive=true", code="is_dir")
             # Safe rmtree: refuse to touch the project root itself.
-            require(path != _PROJECT_ROOT,
-                    "refusing to delete project root")
+            require(path != _PROJECT_ROOT, "refusing to delete project root")
             import shutil
+
             shutil.rmtree(path)
         else:
             path.unlink()

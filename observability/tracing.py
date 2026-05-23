@@ -22,17 +22,15 @@ Three concerns live here, all behind one import:
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import logging
 import logging.handlers
 import os
 import time
-import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Iterator, Optional
+from typing import Any, Iterator, Optional
 
 
 # ─── Constants ────────────────────────────────────────────────────────────
@@ -42,16 +40,15 @@ TRACE_LOG_FALLBACK = Path.home() / ".local/share/jarvis/jarvis_agent.trace"
 
 # Default scoring weights — tune via env without touching code.
 SCORE_BASE = 100
-W_DURATION_S_PER_POINT = float(os.environ.get(
-    "JARVIS_SCORE_W_DURATION_S", "5.0"))     # 1 point lost per 5s
-W_TOKENS_PER_POINT = float(os.environ.get(
-    "JARVIS_SCORE_W_TOKENS", "1000.0"))      # 1 point lost per 1k tokens
-W_EXCEPTION_PENALTY = int(os.environ.get(
-    "JARVIS_SCORE_W_EXCEPTION", "30"))
-W_TEST_FAIL_PENALTY = int(os.environ.get(
-    "JARVIS_SCORE_W_TEST_FAIL", "40"))
-W_BUDGET_OVERRUN_PENALTY = int(os.environ.get(
-    "JARVIS_SCORE_W_BUDGET", "20"))
+W_DURATION_S_PER_POINT = float(
+    os.environ.get("JARVIS_SCORE_W_DURATION_S", "5.0")
+)  # 1 point lost per 5s
+W_TOKENS_PER_POINT = float(
+    os.environ.get("JARVIS_SCORE_W_TOKENS", "1000.0")
+)  # 1 point lost per 1k tokens
+W_EXCEPTION_PENALTY = int(os.environ.get("JARVIS_SCORE_W_EXCEPTION", "30"))
+W_TEST_FAIL_PENALTY = int(os.environ.get("JARVIS_SCORE_W_TEST_FAIL", "40"))
+W_BUDGET_OVERRUN_PENALTY = int(os.environ.get("JARVIS_SCORE_W_BUDGET", "20"))
 SCORE_FLOOR = 0
 
 
@@ -61,18 +58,37 @@ SCORE_FLOOR = 0
 class _JsonLineFormatter(logging.Formatter):
     """One JSON object per line; merges record.extra into the payload."""
 
-    _BUILTIN_FIELDS = frozenset({
-        "args", "asctime", "created", "exc_info", "exc_text", "filename",
-        "funcName", "levelname", "levelno", "lineno", "module", "msecs",
-        "message", "msg", "name", "pathname", "process", "processName",
-        "relativeCreated", "stack_info", "thread", "threadName",
-    })
+    _BUILTIN_FIELDS = frozenset(
+        {
+            "args",
+            "asctime",
+            "created",
+            "exc_info",
+            "exc_text",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "message",
+            "msg",
+            "name",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "stack_info",
+            "thread",
+            "threadName",
+        }
+    )
 
     def format(self, record: logging.LogRecord) -> str:
         out: dict[str, Any] = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S",
-                                time.gmtime(record.created))
-                  + f".{int(record.msecs):03d}Z",
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
+            + f".{int(record.msecs):03d}Z",
             "level": record.levelname,
             "logger": record.name,
             "event": record.getMessage(),
@@ -116,6 +132,7 @@ def get_logger() -> logging.Logger:
     # to the same file.
     try:
         from core import agent as _agent  # noqa: F401
+
         _logger = _agent.get_logger()
         return _logger
     except Exception:
@@ -127,8 +144,7 @@ def get_logger() -> logging.Logger:
     _trace_path = _resolve_trace_path()
     handler = logging.handlers.RotatingFileHandler(
         _trace_path,
-        maxBytes=int(os.environ.get("JARVIS_TRACE_ROTATE_BYTES",
-                                    50 * 1024 * 1024)),
+        maxBytes=int(os.environ.get("JARVIS_TRACE_ROTATE_BYTES", 50 * 1024 * 1024)),
         backupCount=int(os.environ.get("JARVIS_TRACE_KEEP", 5)),
         encoding="utf-8",
     )
@@ -167,16 +183,19 @@ def _otel_init() -> Any:
         from opentelemetry import trace as _trace
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import (
-            BatchSpanProcessor, ConsoleSpanExporter,
+            BatchSpanProcessor,
+            ConsoleSpanExporter,
         )
         from opentelemetry.sdk.resources import Resource
     except ImportError:
         return None  # OTel not installed; that's fine.
 
-    resource = Resource.create({
-        "service.name": os.environ.get("OTEL_SERVICE_NAME", "jarvis"),
-        "service.version": os.environ.get("JARVIS_VERSION", "7.0.0"),
-    })
+    resource = Resource.create(
+        {
+            "service.name": os.environ.get("OTEL_SERVICE_NAME", "jarvis"),
+            "service.version": os.environ.get("JARVIS_VERSION", "7.0.0"),
+        }
+    )
     provider = TracerProvider(resource=resource)
 
     # OTLP exporter if endpoint configured; console exporter otherwise.
@@ -186,9 +205,8 @@ def _otel_init() -> Any:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                 OTLPSpanExporter,
             )
-            provider.add_span_processor(
-                BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
-            )
+
+            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
         except ImportError:
             provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
     else:
@@ -207,9 +225,15 @@ def _otel_span(name: str, attrs: dict[str, Any]) -> Iterator[Any]:
     if tracer is None:
         # No-op fallback; same `as span` shape so callers don't branch.
         class _Noop:
-            def set_attribute(self, k, v): pass
-            def record_exception(self, e): pass
-            def set_status(self, *_a, **_kw): pass
+            def set_attribute(self, k, v):
+                pass
+
+            def record_exception(self, e):
+                pass
+
+            def set_status(self, *_a, **_kw):
+                pass
+
         yield _Noop()
         return
     with tracer.start_as_current_span(name) as span:
@@ -224,6 +248,7 @@ def _otel_span(name: str, attrs: dict[str, Any]) -> Iterator[Any]:
             try:
                 span.record_exception(e)
                 from opentelemetry.trace import Status, StatusCode
+
                 span.set_status(Status(StatusCode.ERROR, repr(e)))
             except Exception:
                 pass
@@ -236,8 +261,8 @@ def _otel_span(name: str, attrs: dict[str, Any]) -> Iterator[Any]:
 class Tracer:
     """High-level event emitter. Used like:
 
-        tr = Tracer.get()
-        tr.event("tool_use", tool="filesystem.write_file", input_keys=[...])
+    tr = Tracer.get()
+    tr.event("tool_use", tool="filesystem.write_file", input_keys=[...])
     """
 
     _instance: Optional["Tracer"] = None
@@ -256,8 +281,7 @@ class Tracer:
 
     def exception(self, _event_name: str, exc: BaseException, /, **fields: Any) -> None:
         merged = {"exc": repr(exc), **fields}
-        self.log.error(_event_name, extra=merged,
-                       exc_info=(type(exc), exc, exc.__traceback__))
+        self.log.error(_event_name, extra=merged, exc_info=(type(exc), exc, exc.__traceback__))
 
 
 def event(_event_name: str, /, **fields: Any) -> None:
@@ -287,9 +311,12 @@ def instrument_llm_call(
         "llm.est_input_tokens": estimated_input_tokens or 0,
     }
     record: dict[str, Any] = {
-        "model": model, "run_id": run_id, "iteration": iteration,
+        "model": model,
+        "run_id": run_id,
+        "iteration": iteration,
         "estimated_input_tokens": estimated_input_tokens,
-        "input_tokens": None, "output_tokens": None,
+        "input_tokens": None,
+        "output_tokens": None,
         "exception": None,
     }
     t0 = time.monotonic()
@@ -325,14 +352,14 @@ def instrument_tool_call(
     """Context manager for tool dispatch. Captures duration, exception,
     and the resulting snapshot tag (if any)."""
     record: dict[str, Any] = {
-        "tool": tool, "destructive": is_destructive,
+        "tool": tool,
+        "destructive": is_destructive,
         "snapshot": snapshot_tag,
         "exception": None,
     }
     t0 = time.monotonic()
     event("tool_use.start", **record)
-    with _otel_span("tool.call",
-                    {"tool.name": tool, "tool.destructive": is_destructive}) as span:
+    with _otel_span("tool.call", {"tool.name": tool, "tool.destructive": is_destructive}) as span:
         try:
             yield record
         except BaseException as e:
@@ -351,12 +378,16 @@ def instrument_tool_call(
             event("tool_use.end", **record)
 
 
-def record_mutation(*, kind: str, target: str, snapshot_tag: Optional[str] = None,
-                    metadata: Optional[dict[str, Any]] = None) -> None:
+def record_mutation(
+    *,
+    kind: str,
+    target: str,
+    snapshot_tag: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
     """Emit a `mutation` trace event for any filesystem / DB / system
     change. snapshot_tag is the pre-mutation tag (if a snapshot was taken)."""
-    event("mutation", kind=kind, target=target,
-          snapshot=snapshot_tag, metadata=metadata or {})
+    event("mutation", kind=kind, target=target, snapshot=snapshot_tag, metadata=metadata or {})
 
 
 def record_exception(where: str, exc: BaseException, **fields: Any) -> None:
@@ -370,13 +401,14 @@ def record_exception(where: str, exc: BaseException, **fields: Any) -> None:
 class TaskExecution:
     """Inputs to the scorer. Pass what you measured; missing values are
     treated as zero / unknown rather than raising."""
+
     task_id: str
     actor: str = "jarvis"
     tool: str = ""
     duration_s: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
-    token_budget: int = 0          # 0 means "no budget configured"
+    token_budget: int = 0  # 0 means "no budget configured"
     exit_code: Optional[int] = None
     exceptions: int = 0
     tests_total: int = 0
@@ -433,9 +465,7 @@ def score_task(ex: TaskExecution) -> ScoreBreakdown:
         failed = ex.tests_total - ex.tests_passed
         p = min(W_TEST_FAIL_PENALTY, int(W_TEST_FAIL_PENALTY * failed / ex.tests_total))
         breakdown.test_fail_penalty = p
-        breakdown.reasons.append(
-            f"-{p} for {failed}/{ex.tests_total} tests failed"
-        )
+        breakdown.reasons.append(f"-{p} for {failed}/{ex.tests_total} tests failed")
 
     if ex.token_budget > 0 and total_tokens > ex.token_budget:
         breakdown.budget_overrun_penalty = W_BUDGET_OVERRUN_PENALTY
@@ -443,12 +473,14 @@ def score_task(ex: TaskExecution) -> ScoreBreakdown:
             f"-{W_BUDGET_OVERRUN_PENALTY} for tokens {total_tokens} > budget {ex.token_budget}"
         )
 
-    total = (breakdown.base
-             - breakdown.duration_penalty
-             - breakdown.token_penalty
-             - breakdown.exception_penalty
-             - breakdown.test_fail_penalty
-             - breakdown.budget_overrun_penalty)
+    total = (
+        breakdown.base
+        - breakdown.duration_penalty
+        - breakdown.token_penalty
+        - breakdown.exception_penalty
+        - breakdown.test_fail_penalty
+        - breakdown.budget_overrun_penalty
+    )
     breakdown.score = max(SCORE_FLOOR, min(100, total))
     return breakdown
 
@@ -490,6 +522,7 @@ async def ensure_metrics_schema() -> bool:
         return True
     try:
         from core import database
+
         await database.execute(_METRICS_SCHEMA_SQL)
         _metrics_table_ready = True
         return True
@@ -498,14 +531,14 @@ async def ensure_metrics_schema() -> bool:
         return False
 
 
-async def persist_score(ex: TaskExecution, breakdown: ScoreBreakdown
-                        ) -> Optional[int]:
+async def persist_score(ex: TaskExecution, breakdown: ScoreBreakdown) -> Optional[int]:
     """Insert one row into ``metrics``. Returns the row id or None on
     failure. Best-effort: failures are logged, not raised."""
     if not await ensure_metrics_schema():
         return None
     try:
         from core import database
+
         row = await database.fetchrow(
             """
             INSERT INTO metrics (task_id, actor, tool, score, duration_s,
@@ -516,15 +549,23 @@ async def persist_score(ex: TaskExecution, breakdown: ScoreBreakdown
                     $13::jsonb, $14)
             RETURNING id
             """,
-            ex.task_id, ex.actor, ex.tool, breakdown.score,
-            ex.duration_s, ex.input_tokens, ex.output_tokens,
-            ex.token_budget, ex.exit_code, ex.exceptions,
-            ex.tests_total, ex.tests_passed,
-            json.dumps(breakdown.asdict()), ex.notes,
+            ex.task_id,
+            ex.actor,
+            ex.tool,
+            breakdown.score,
+            ex.duration_s,
+            ex.input_tokens,
+            ex.output_tokens,
+            ex.token_budget,
+            ex.exit_code,
+            ex.exceptions,
+            ex.tests_total,
+            ex.tests_passed,
+            json.dumps(breakdown.asdict()),
+            ex.notes,
         )
         rid = int(row["id"])
-        event("metrics.persisted", id=rid, task_id=ex.task_id,
-              score=breakdown.score)
+        event("metrics.persisted", id=rid, task_id=ex.task_id, score=breakdown.score)
         return rid
     except Exception as e:
         event("metrics.persist_failed", task_id=ex.task_id, exc=repr(e))
@@ -534,12 +575,16 @@ async def persist_score(ex: TaskExecution, breakdown: ScoreBreakdown
 async def evaluate_and_persist(ex: TaskExecution) -> ScoreBreakdown:
     """Convenience: score + persist + emit event. Returns the breakdown."""
     breakdown = score_task(ex)
-    event("evaluation",
-          task_id=ex.task_id, score=breakdown.score,
-          reasons=breakdown.reasons,
-          duration_s=ex.duration_s, total_tokens=(ex.input_tokens + ex.output_tokens),
-          exceptions=ex.exceptions,
-          tests=(ex.tests_passed, ex.tests_total))
+    event(
+        "evaluation",
+        task_id=ex.task_id,
+        score=breakdown.score,
+        reasons=breakdown.reasons,
+        duration_s=ex.duration_s,
+        total_tokens=(ex.input_tokens + ex.output_tokens),
+        exceptions=ex.exceptions,
+        tests=(ex.tests_passed, ex.tests_total),
+    )
     await persist_score(ex, breakdown)
     return breakdown
 
@@ -549,6 +594,7 @@ async def evaluate_and_persist(ex: TaskExecution) -> ScoreBreakdown:
 
 def _main() -> None:  # pragma: no cover
     import argparse
+
     parser = argparse.ArgumentParser(prog="observability.tracing")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -570,7 +616,7 @@ def _main() -> None:  # pragma: no cover
         print(f"# trace: {p}")
         try:
             with open(p, "r", encoding="utf-8") as f:
-                lines = f.readlines()[-args.n:]
+                lines = f.readlines()[-args.n :]
             for line in lines:
                 print(line.rstrip())
         except FileNotFoundError:
@@ -579,7 +625,9 @@ def _main() -> None:  # pragma: no cover
 
     if args.cmd == "score":
         ex = TaskExecution(
-            task_id="cli", actor="dev", tool="cli",
+            task_id="cli",
+            actor="dev",
+            tool="cli",
             duration_s=args.duration_s,
             input_tokens=args.input_tokens,
             output_tokens=args.output_tokens,
