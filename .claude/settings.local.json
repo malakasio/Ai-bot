@@ -15,7 +15,18 @@
       "Bash(playwright *)",
       "Bash(docker-compose *)",
       "Bash(docker exec jarvis-xvfb *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(journalctl -u jarvis --since \"3 minutes ago\" --no-pager)",
+      "Bash(journalctl -u jarvis --since \"5 minutes ago\" --no-pager)",
+      "Bash(journalctl -u jarvis --since \"5 minutes ago\" --no-pager -o cat)",
+      "Bash(journalctl -u jarvis --since \"2 minutes ago\" --no-pager)",
+      "Bash(curl -s http://localhost:8000/mcp/tools)",
+      "Bash(journalctl -u jarvis --no-pager -n 20)",
+      "Bash(journalctl -u jarvis --no-pager -n 50)",
+      "Bash(journalctl -u jarvis --no-pager -n 10)",
+      "Bash(journalctl -u jarvis --no-pager -n 200)",
+      "Bash(sudo systemctl restart jarvis)",
+      "Bash(curl -s http://localhost:8000/metrics)"
     ]
   }
 }
