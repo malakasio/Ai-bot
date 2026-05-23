@@ -302,6 +302,45 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
             f"(no final message — stopped: {run.stopped_reason or 'unknown'}, "
             f"iterations: {run.iterations})"
         )
+
+    # Extract screenshots from transcript and send as photos
+    screenshots = []
+    for msg in run.transcript:
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    tool_content = block.get("content")
+                    if isinstance(tool_content, str):
+                        try:
+                            import json
+                            result = json.loads(tool_content)
+                            if isinstance(result, dict) and "screenshot_base64" in result:
+                                screenshots.append(result["screenshot_base64"])
+                        except Exception:
+                            pass
+
+    # Send screenshots via Telegram
+    if screenshots:
+        try:
+            from telegram import Bot
+            import base64
+            from io import BytesIO
+
+            bot = Bot(token=_bot_token())
+            for i, b64_data in enumerate(screenshots):
+                try:
+                    img_bytes = base64.b64decode(b64_data)
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=BytesIO(img_bytes),
+                        caption=f"Screenshot {i+1}/{len(screenshots)}" if len(screenshots) > 1 else None
+                    )
+                except Exception as e:
+                    _log().error(f"Failed to send screenshot {i+1}: {e}")
+        except Exception as e:
+            _log().error(f"Failed to process screenshots: {e}")
+
     return reply
 
 
