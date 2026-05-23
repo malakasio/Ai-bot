@@ -49,8 +49,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import tempfile
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Optional
 
 
@@ -211,6 +213,65 @@ async def _send(bot, chat_id: int, text: str) -> None:
                 # Soft rate-limit between chunks (Telegram allows ~1 msg/s
                 # per chat for bots).
                 await asyncio.sleep(1.0)
+
+
+# ─── Voice transcription ────────────────────────────────────────────────────
+
+
+async def _transcribe_voice(file_path: str) -> str:
+    """Transcribe an audio file using Deepgram API.
+
+    Args:
+        file_path: Path to the audio file to transcribe
+
+    Returns:
+        Transcribed text
+
+    Raises:
+        Exception: If transcription fails
+    """
+    log = _log()
+    api_key = os.environ.get("DEEPGRAM_API_KEY", "").strip()
+    if not api_key:
+        raise Exception("DEEPGRAM_API_KEY not set")
+
+    try:
+        from deepgram import DeepgramClient, PrerecordedOptions, FileSource
+    except ImportError as e:
+        raise Exception(f"deepgram-sdk not installed: {e}") from e
+
+    try:
+        # Read the audio file
+        with open(file_path, "rb") as audio_file:
+            buffer_data = audio_file.read()
+
+        payload: FileSource = {
+            "buffer": buffer_data,
+        }
+
+        # Configure Deepgram options
+        options = PrerecordedOptions(
+            model="nova-2",
+            smart_format=True,
+            language="en",
+        )
+
+        # Initialize Deepgram client and transcribe
+        client = DeepgramClient(api_key)
+        response = client.listen.rest.v("1").transcribe_file(payload, options)
+
+        # Extract transcript from response
+        transcript = response.results.channels[0].alternatives[0].transcript
+
+        if not transcript:
+            raise Exception("Deepgram returned empty transcript")
+
+        log.info(f"Transcribed voice message: {len(transcript)} chars")
+        return transcript.strip()
+
+    except Exception as e:
+        log.error(f"Deepgram transcription failed: {e}")
+        raise Exception(f"Transcription failed: {e}") from e
 
 
 # ─── Agent invocation ───────────────────────────────────────────────────────
@@ -533,6 +594,91 @@ async def start_telegram_bot() -> None:
 
         await _send(context.bot, chat_id, reply)
 
+    # ── Voice handler — download, transcribe, pass to agent ─────────────
+
+    @auth_required
+    async def handle_voice(update, context):
+        chat_id = update.effective_chat.id
+        voice = update.message.voice
+        if not voice:
+            return
+
+        log.info(f"Received voice message: duration={voice.duration}s, "
+                 f"file_size={voice.file_size} bytes")
+
+        # Show "typing…" while processing
+        try:
+            await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
+        except Exception:
+            pass
+
+        temp_file = None
+        try:
+            # Download the voice message
+            file = await context.bot.get_file(voice.file_id)
+
+            # Create temp file with proper extension (Telegram voice is OGG)
+            temp_file = tempfile.NamedTemporaryFile(
+                delete=False, suffix=".ogg", prefix="telegram_voice_"
+            )
+            temp_path = temp_file.name
+            temp_file.close()
+
+            # Download to temp file
+            await file.download_to_drive(temp_path)
+            log.info(f"Downloaded voice to {temp_path}")
+
+            # Transcribe using Deepgram
+            try:
+                text = await _transcribe_voice(temp_path)
+                log.info(f"Transcription: {text[:100]}...")
+            except Exception as e:
+                log.error(f"Transcription failed: {e}")
+                await _send(context.bot, chat_id,
+                           f"⚠️ Voice transcription failed: {e}")
+                return
+
+            # Send transcription confirmation
+            await _send(context.bot, chat_id,
+                       f"🎤 _Transcribed:_ {text}\n\n_Processing..._")
+
+            # Process through agent like text message
+            if len(text) > _MAX_PROMPT_CHARS:
+                await _send(context.bot, chat_id,
+                    f"⚠️ Transcription too long ({len(text)} chars > "
+                    f"{_MAX_PROMPT_CHARS}). Truncating.")
+                text = text[:_MAX_PROMPT_CHARS]
+
+            _append_history(chat_id, "user", text)
+
+            t0 = time.time()
+            try:
+                reply = await _run_agent(chat_id, text)
+            except Exception as e:
+                log.exception("handle_voice agent crashed")
+                reply = f"⚠️ Internal error: {e!r}"
+            dt = time.time() - t0
+
+            _append_history(chat_id, "assistant", reply)
+
+            log.info("agent.reply (voice) chat_id=%s len=%d dt=%.2fs",
+                     chat_id, len(reply), dt)
+
+            await _send(context.bot, chat_id, reply)
+
+        except Exception as e:
+            log.exception("handle_voice crashed")
+            await _send(context.bot, chat_id,
+                       f"⚠️ Voice message processing failed: {e!r}")
+        finally:
+            # Clean up temp file
+            if temp_file and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                    log.debug(f"Cleaned up temp file {temp_path}")
+                except Exception as e:
+                    log.warning(f"Failed to clean up {temp_path}: {e}")
+
     # ── Error handler ───────────────────────────────────────────────────
 
     async def on_error(update, context):
@@ -557,6 +703,9 @@ async def start_telegram_bot() -> None:
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
+    )
+    application.add_handler(
+        MessageHandler(filters.VOICE, handle_voice)
     )
     application.add_error_handler(on_error)
 
