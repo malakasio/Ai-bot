@@ -115,14 +115,15 @@ _UPSTREAM_TOOLS: list[dict[str, Any]] = [
     {"name": "validate_workflow", "desc": "Validate a workflow structure.", "schema": {"type": "object", "properties": {"workflow": {"type": "object"}}, "required": ["workflow"]}},
 ]
 
-# LOCAL REST TOOLS (2): Provided by local REST client
-# These query execution history (n8n public API supports read operations only).
+# LOCAL REST TOOLS (3): Provided by local REST client
+# These query execution history and workflows (n8n public API supports read operations only).
 # Note: Workflow execution is NOT supported by n8n public API.
 # Use n8n_trigger tool (automation_mcp.py) for webhook-based execution instead.
 
 _LOCAL_REST_TOOLS: list[dict[str, Any]] = [
     {"name": "n8n_list_executions", "desc": "List workflow executions. Filter by workflow_id, status, limit.", "schema": {"type": "object", "properties": {"workflow_id": {"type": "string"}, "status": {"type": "string", "enum": ["error", "success", "running", "waiting"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}}},
     {"name": "n8n_get_execution", "desc": "Get a single execution by ID with full node-by-node data.", "schema": {"type": "object", "properties": {"execution_id": {"type": "string"}}, "required": ["execution_id"]}},
+    {"name": "n8n_list_workflows", "desc": "List all workflows with optional filters (active, tags, name search).", "schema": {"type": "object", "properties": {"active": {"type": "boolean", "description": "Filter by active status"}, "tags": {"type": "string", "description": "Comma-separated tag names"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Max workflows to return (default: 100)"}}}},
 ]
 
 # ─── Lazy subprocess client ──────────────────────────────────────────────
@@ -365,15 +366,61 @@ async def _rest_get_execution(args: dict[str, Any]) -> dict[str, Any]:
     return ok(resp["data"])
 
 
+async def _rest_list_workflows(args: dict[str, Any]) -> dict[str, Any]:
+    """List workflows via REST API."""
+    err_msg = _check_config()
+    if err_msg:
+        return err(err_msg, code="missing_config")
+
+    limit = args.get("limit", 100)
+    if limit is not None:
+        limit = int(limit)
+        if limit < 1 or limit > 100:
+            return err("limit must be 1-100", code="invalid_input")
+
+    active = args.get("active")
+    tags = args.get("tags")
+
+    params = []
+    if limit:
+        params.append(f"limit={limit}")
+    if active is not None:
+        params.append(f"active={'true' if active else 'false'}")
+    if tags:
+        # Validate tags (alphanumeric + hyphen/underscore only)
+        tag_list = [t.strip() for t in tags.split(",")]
+        for tag in tag_list:
+            if not re.match(r'^[A-Za-z0-9_-]+$', tag):
+                return err(f"Invalid tag format: {tag}", code="invalid_input")
+        params.append(f"tags={tags}")
+    qs = "?" + "&".join(params) if params else ""
+
+    resp = await _n8n_request("GET", f"/workflows{qs}")
+    if "_error" in resp:
+        return err(f"n8n request failed: {resp['_error']}", code="http_error")
+    if not resp["ok"]:
+        return err(f"n8n returned HTTP {resp['status']}", code="http_status",
+                   detail=resp["data"])
+
+    data = resp["data"]
+    workflows = data.get("data", data) if isinstance(data, dict) else data
+    return ok({
+        "count": len(workflows) if isinstance(workflows, list) else 0,
+        "workflows": workflows,
+    })
+
+
 # ─── Tool handler factory ────────────────────────────────────────────────
 
 def _make_handler(tool_name: str):
     """Return an async handler that routes to either REST or stdio bridge."""
-    # Route execution history tools to local REST client
+    # Route execution history and workflow tools to local REST client
     if tool_name == "n8n_list_executions":
         return _rest_list_executions
     elif tool_name == "n8n_get_execution":
         return _rest_get_execution
+    elif tool_name == "n8n_list_workflows":
+        return _rest_list_workflows
 
     # Route all other tools to upstream stdio bridge
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
@@ -436,10 +483,13 @@ async def call_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     """
     _register()  # Ensure tools are registered
 
-    # Route execution history tools to REST handlers
+    # Route execution history and workflow tools to REST handlers
     if tool_name == "n8n_list_executions":
         return await _rest_list_executions(args)
     elif tool_name == "n8n_get_execution":
+        return await _rest_get_execution(args)
+    elif tool_name == "n8n_list_workflows":
+        return await _rest_list_workflows(args)
         return await _rest_get_execution(args)
 
     # Route all other tools to stdio bridge

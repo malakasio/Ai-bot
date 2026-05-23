@@ -77,7 +77,7 @@
       "name": "n8n",
       "enabled": true,
       "module": "mcp.n8n_mcp",
-      "description": "n8n workflow automation via hybrid architecture: upstream czlonkowski/n8n-mcp stdio bridge (7 validation/docs tools) + local REST client (2 execution history tools). Note: Workflow execution NOT supported by n8n public API - use n8n_trigger (automation_mcp) for webhook-based execution.",
+      "description": "n8n workflow automation via hybrid architecture: upstream czlonkowski/n8n-mcp stdio bridge (7 validation/docs tools) + local REST client (3 execution/workflow tools). Note: Workflow execution NOT supported by n8n public API - use n8n_trigger (automation_mcp) for webhook-based execution.",
       "env_passthrough": [
         "N8N_BASE_URL",
         "N8N_API_KEY"
@@ -91,13 +91,14 @@
         "search_templates",
         "validate_workflow",
         "n8n_list_executions",
-        "n8n_get_execution"
+        "n8n_get_execution",
+        "n8n_list_workflows"
       ],
       "known_upstream": {
         "package": "czlonkowski/n8n-mcp",
         "version": "2.55.0",
         "bin": "n8n-mcp",
-        "note": "Upstream provides 7 validation/docs tools. Local REST provides 2 execution history tools. n8n public API does NOT support workflow execution - use webhooks instead."
+        "note": "Upstream provides 7 validation/docs tools. Local REST provides 3 tools: execution history (2) + workflow listing (1). N8n public API does NOT support workflow execution - use webhooks instead."
       }
     },
     {

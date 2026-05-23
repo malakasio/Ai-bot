@@ -163,20 +163,15 @@ After every significant task:
 
 ## Model
 
-JARVIS v7.0 is **Haiku-only**. Every Claude call — agent loop, voice pipeline,
-CLI helpers — uses `claude-haiku-4-5`.
+JARVIS v7.0 uses **Claude Sonnet 4.5** by default. The agent loop, voice pipeline, and CLI helpers all use `claude-sonnet-4-5` unless overridden.
 
 | Surface | File | Constant | Override |
 |---------|------|----------|----------|
-| Agent loop | `core/agent.py` | `DEFAULT_MODEL` | `JARVIS_AGENT_MODEL` env |
-| Voice pipeline | `voice/pipeline.py` | `DEFAULT_LLM_MODEL` | — |
-| CLI helpers | `cursor.py`, `fix_and_push.py` | `MODEL` | `ANTHROPIC_MODEL` env |
+| Agent loop | `core/agent.py` | `DEFAULT_MODEL = "claude-sonnet-4-5"` | `JARVIS_AGENT_MODEL` env |
+| Voice pipeline | `voice/pipeline.py` | `DEFAULT_LLM_MODEL = "claude-sonnet-4-5"` | — |
+| CLI helpers | `cursor.py`, `fix_and_push.py` | `MODEL = "claude-sonnet-4-5"` | `ANTHROPIC_MODEL` env |
 
-Rationale: Haiku's ~350 ms TTFT is what makes the voice channel hit its
-< 500 ms end-to-end target, and it's cheap enough to leave running in the
-KAIROS background loop. If a future task class genuinely needs Sonnet or
-Opus, introduce a router (`core/router.py`) and update this table — don't
-drift a doc that claims routing the code doesn't do.
+Rationale: Sonnet 4.5 provides better reasoning and tool use accuracy than Haiku, with acceptable latency for most use cases. For latency-critical voice interactions, consider overriding to Haiku via `JARVIS_AGENT_MODEL=claude-haiku-4-5`.
 
 ---
 
