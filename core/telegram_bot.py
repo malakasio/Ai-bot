@@ -288,8 +288,19 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
         tools = None
 
     try:
+        # Load CLAUDE.md as system prompt to enforce tool usage
+        system_prompt = None
+        try:
+            from pathlib import Path
+            claude_md = Path(__file__).resolve().parent.parent / "CLAUDE.md"
+            if claude_md.exists():
+                system_prompt = claude_md.read_text().strip()
+                _log().debug("Loaded CLAUDE.md as system prompt")
+        except Exception as e:
+            _log().warning(f"Failed to load CLAUDE.md: {e}")
+
         run = await asyncio.wait_for(
-            run_jarvis_core(prompt, tools=tools),
+            run_jarvis_core(prompt, tools=tools, system=system_prompt),
             timeout=_AGENT_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
