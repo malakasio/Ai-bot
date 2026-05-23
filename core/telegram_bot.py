@@ -336,9 +336,13 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
                     elif isinstance(tool_content, dict):
                         result = tool_content
 
-                    if isinstance(result, dict) and "screenshot_base64" in result:
-                        screenshots.append(result["screenshot_base64"])
-                        _log().info(f"Found screenshot in transcript, size: {result.get('size_bytes', 'unknown')} bytes")
+                    # MCP tools return {ok: True, data: {...}, error: None}
+                    # Extract screenshot from the data field
+                    if isinstance(result, dict):
+                        data = result.get("data", result)  # Handle both wrapped and unwrapped formats
+                        if isinstance(data, dict) and "screenshot_base64" in data:
+                            screenshots.append(data["screenshot_base64"])
+                            _log().info(f"Found screenshot in transcript, size: {data.get('size_bytes', 'unknown')} bytes")
 
     # Send screenshots via Telegram
     if screenshots:
