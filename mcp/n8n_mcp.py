@@ -65,7 +65,7 @@ async def _n8n_request(method: str, path: str, *,
                        json_body: Optional[dict[str, Any]] = None,
                        timeout: float = 60.0) -> dict[str, Any]:
     """Call the n8n REST API and return a structured response."""
-    url = f"{_base_url()}/api/v1{path}"
+    url = f"{_base_url()}{path}"
     try:
         import httpx
     except ImportError:
@@ -321,7 +321,7 @@ async def _rest_execute_workflow(args: dict[str, Any]) -> dict[str, Any]:
     if data:
         body["data"] = data
 
-    resp = await _n8n_request("POST", f"/workflows/{wf_id}/execute",
+    resp = await _n8n_request("POST", f"/rest/workflows/{wf_id}/run",
                               json_body=body, timeout=timeout + 5)
     if "_error" in resp:
         return err(f"n8n request failed: {resp['_error']}", code="http_error")
@@ -367,7 +367,7 @@ async def _rest_list_executions(args: dict[str, Any]) -> dict[str, Any]:
         params.append(f"status={status}")
     qs = "?" + "&".join(params) if params else ""
 
-    resp = await _n8n_request("GET", f"/executions{qs}")
+    resp = await _n8n_request("GET", f"/rest/executions{qs}")
     if "_error" in resp:
         return err(f"n8n request failed: {resp['_error']}", code="http_error")
     if not resp["ok"]:
@@ -391,7 +391,7 @@ async def _rest_get_execution(args: dict[str, Any]) -> dict[str, Any]:
     exec_id = require_str(args["execution_id"], "execution_id", max_len=64,
                           pattern=r"[0-9]+")
 
-    resp = await _n8n_request("GET", f"/executions/{exec_id}")
+    resp = await _n8n_request("GET", f"/rest/executions/{exec_id}")
     if "_error" in resp:
         return err(f"n8n request failed: {resp['_error']}", code="http_error")
     if not resp["ok"]:
