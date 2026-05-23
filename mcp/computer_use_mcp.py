@@ -362,3 +362,8 @@ async def cleanup():
     if _browser:
         await _browser.close()
         _browser = None
+
+
+def get_server() -> Server:
+    """Return the computer-use MCP server instance."""
+    return server

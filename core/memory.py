@@ -1,7 +1,7 @@
 """Memory API — episodic, semantic, procedural, task queue.
 
-Thin async functions over core.database. No business logic beyond
-serialization, parameter binding, and a sensible default ordering.
+Thin async functions over unified database adapter (PostgreSQL/SQLite).
+Uses src.jarvis.memory.database for backend abstraction.
 
 The three functions named in the goal are surfaced at module top:
     store_episode()
@@ -15,13 +15,20 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional, Sequence
 from uuid import UUID
 
-from . import database
+# Add src/ to path for imports
+_HERE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_HERE / "src"))
+
+# Use unified database adapter from src/jarvis
+from jarvis.memory import database
 
 
 # ─── Types ────────────────────────────────────────────────────────────────

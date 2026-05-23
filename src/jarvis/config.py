@@ -148,6 +148,17 @@ class MemoryConfig:
     max_working_memory_tokens: int = 180_000
     context_trim_target_pct: float = 0.80
     memory_retrieval_top_k: int = 5
+
+    # PostgreSQL (v7.0 core/ backend)
+    database_url: str = field(default_factory=lambda: os.environ.get("DATABASE_URL", ""))
+    postgres_host: str = field(default_factory=lambda: os.environ.get("POSTGRES_HOST", "localhost"))
+    postgres_port: str = field(default_factory=lambda: os.environ.get("POSTGRES_PORT", "5432"))
+    postgres_db: str = field(default_factory=lambda: os.environ.get("POSTGRES_DB", "jarvis"))
+    postgres_user: str = field(default_factory=lambda: os.environ.get("POSTGRES_USER", "jarvis"))
+    postgres_password: str = field(default_factory=lambda: os.environ.get("POSTGRES_PASSWORD", ""))
+    db_pool_min_size: int = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
+    db_pool_max_size: int = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
+    db_command_timeout: int = int(os.environ.get("DB_COMMAND_TIMEOUT", "30"))
     similarity_threshold: float = 0.75
     raw_log_retention_days: int = 7
 
