@@ -311,17 +311,24 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     tool_content = block.get("content")
+                    # Handle both string (JSON) and dict formats
+                    result = None
                     if isinstance(tool_content, str):
                         try:
                             import json
                             result = json.loads(tool_content)
-                            if isinstance(result, dict) and "screenshot_base64" in result:
-                                screenshots.append(result["screenshot_base64"])
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            _log().debug(f"Failed to parse tool_content as JSON: {e}")
+                    elif isinstance(tool_content, dict):
+                        result = tool_content
+
+                    if isinstance(result, dict) and "screenshot_base64" in result:
+                        screenshots.append(result["screenshot_base64"])
+                        _log().info(f"Found screenshot in transcript, size: {result.get('size_bytes', 'unknown')} bytes")
 
     # Send screenshots via Telegram
     if screenshots:
+        _log().info(f"Sending {len(screenshots)} screenshot(s) to chat_id={chat_id}")
         try:
             from telegram import Bot
             import base64
@@ -336,10 +343,13 @@ async def _run_agent(chat_id: int, user_text: str) -> str:
                         photo=BytesIO(img_bytes),
                         caption=f"Screenshot {i+1}/{len(screenshots)}" if len(screenshots) > 1 else None
                     )
+                    _log().info(f"Screenshot {i+1}/{len(screenshots)} sent successfully")
                 except Exception as e:
                     _log().error(f"Failed to send screenshot {i+1}: {e}")
         except Exception as e:
             _log().error(f"Failed to process screenshots: {e}")
+    else:
+        _log().debug("No screenshots found in transcript")
 
     return reply
 
