@@ -233,8 +233,8 @@ jarvis/
 1. **Remove Secrets from .env**
    ```bash
    # IMMEDIATE: Remove these from .env
-   TELEGRAM_BOT_TOKEN=7965507190:AAFt-3aADUXkXTYfSqTcg8O6syEC4T4NtgY
-   N8N_API_KEY=<267-char JWT>
+   TELEGRAM_BOT_TOKEN=your-telegram-bot-token-here
+   N8N_API_KEY=your-n8n-api-key-here
    ```
 
 2. **Fix SQL Injection** - `core/memory.py:116-126`

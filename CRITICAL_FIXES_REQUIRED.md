@@ -184,8 +184,8 @@ async def __aexit__(self, exc_type, exc, tb):
 
 **Current:**
 ```bash
-TELEGRAM_BOT_TOKEN=7965507190:AAFt-3aADUXkXTYfSqTcg8O6syEC4T4NtgY
-N8N_API_KEY=<267-char JWT token>
+TELEGRAM_BOT_TOKEN=your-telegram-bot-token-here
+N8N_API_KEY=your-n8n-api-key-here
 ```
 
 **Action Required:**

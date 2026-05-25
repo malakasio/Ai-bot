@@ -3,10 +3,10 @@
     "allow": [
       "Bash(git tag *)",
       "Bash(python3 *)",
-      "Bash(curl -s -X POST https://api.neutralbeats.com/v1/messages -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-63b3df2b26771f37-90ef4c-b1ab8ba0' -H 'anthropic-version: 2023-06-01' -d '{\"model\":\"claude-sonnet-4-6\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}')",
+      "Bash(curl -s -X POST https://api.neutralbeats.com/v1/messages -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-ant-api-key-here' -H 'anthropic-version: 2023-06-01' -d '{\"model\":\"claude-sonnet-4-6\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}')",
       "Bash(systemctl restart *)",
       "Bash(systemctl status *)",
-      "Bash(curl -s -X POST https://api.neutralbeats.com/v1/messages -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-63b3df2b26771f37-90ef4c-b1ab8ba0' -H 'anthropic-version: 2023-06-01' -d '{\"model\":\"claude-sonnet-4-6\",\"max_tokens\":20,\"messages\":[{\"role\":\"user\",\"content\":\"Say hello in Greek\"}]}')",
+      "Bash(curl -s -X POST https://api.neutralbeats.com/v1/messages -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-ant-api-key-here' -H 'anthropic-version: 2023-06-01' -d '{\"model\":\"claude-sonnet-4-6\",\"max_tokens\":20,\"messages\":[{\"role\":\"user\",\"content\":\"Say hello in Greek\"}]}')",
       "Bash(git -C /root/Ai-bot log -p --all -S \"xvfb\" -- docker-compose.yml)",
       "Bash(git -C /root/Ai-bot log --all --oneline --since=\"2026-05-22\")",
       "Bash(git *)",
