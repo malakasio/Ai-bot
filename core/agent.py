@@ -69,7 +69,7 @@ DEFAULT_INPUT_TOKEN_LIMIT: int = 180_000  # Claude-Sonnet/Opus context cap
 DEFAULT_OUTPUT_TOKEN_BUDGET: int = 4_096
 
 # Default model — overridable via env JARVIS_AGENT_MODEL.
-DEFAULT_MODEL: str = "claude-sonnet-4-5"
+DEFAULT_MODEL: str = "claude-sonnet-4-6"
 
 TRACE_LOG_PATH = Path("/var/log/jarvis_agent.trace")
 TRACE_LOG_FALLBACK = Path.home() / ".local/share/jarvis/jarvis_agent.trace"
@@ -335,7 +335,7 @@ def build_async_client() -> Any:
 def _is_transient(exc: BaseException) -> bool:
     """Classify an exception as transient (worth retrying)."""
     # json.JSONDecodeError means the upstream returned an empty / invalid
-    # body — e.g. a proxy (giftcat) returning HTTP 200 with no content.
+    # body — e.g. a proxy returning HTTP 200 with no content.
     # This is inherently transient; the next attempt may get a real body.
     if isinstance(exc, json.JSONDecodeError):
         return True
