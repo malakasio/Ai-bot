@@ -55,8 +55,8 @@ CREATE INDEX IF NOT EXISTS history_logs_failure_idx ON history_logs (failure_mod
   WHERE failure_mode IS NOT NULL;
 
 -- ─── 3. Semantic memory ───────────────────────────────────────────────────
--- pgvector with 1536-dim embeddings (OpenAI text-embedding-3-small /
--- Cohere / many others). Change vector(1536) if your embedder differs;
+-- pgvector with 1536-dim embeddings (OpenAI sentence-transformers MiniLM-L12-v2 (384-dim) /
+-- Cohere / many others). Change vector(384) if your embedder differs;
 -- match PGVECTOR_DIM in .env.
 CREATE TABLE IF NOT EXISTS jarvis_semantic_memory (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS jarvis_semantic_memory (
                     CHECK (confidence >= 0 AND confidence <= 1),
   observation_count INTEGER NOT NULL DEFAULT 1,
   last_observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  embedding       vector(1536) NOT NULL,
+  embedding       vector(384) NOT NULL,
   metadata        JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 

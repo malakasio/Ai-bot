@@ -29,6 +29,25 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-jarvis}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jarvis}
       POSTGRES_INITDB_ARGS: "--data-checksums"
+  # ─── Qdrant Vector DB (semantic memory) ──────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: jarvis-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=6333
+    networks:
+      - jarvis_internal
+    restart: unless-stopped
+    profiles:
+      - full
+      - vector
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
@@ -204,6 +223,7 @@ services:
       - backup
 
 volumes:
+  qdrant_data:
   postgres_data:
   n8n_data:
   jarvis_data:

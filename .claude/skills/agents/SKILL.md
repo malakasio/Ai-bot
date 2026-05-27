@@ -2,7 +2,20 @@ Skill: Agent Orchestration
 
 Purpose
 
-Coordinate multi-agent workflows for complex, parallelizable tasks.
+Coordinate multi-agent workflows via the orchestrator sub-agent.
+
+Sub-agent definitions in .claude/agents/:
+- sentinel.yaml — system health monitoring
+- architect.yaml — design, refactoring, deep analysis
+- haiku.yaml — fast responses, notifications
+- orchestrator.yaml — task dispatch & coordination
+
+System hooks in .claude/hooks/:
+- pre-tool-use.sh — security zone validation before every tool call
+- post-tool-use.sh — episode logging, metrics, autoDream trigger
+- stop.sh — clean shutdown (DB close, LiteLLM stop, state save)
+- precompact.sh — working memory backup before context compaction
+- notification.sh — Telegram alerts on critical events for complex, parallelizable tasks.
 
 Topologies
 

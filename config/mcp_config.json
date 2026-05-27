@@ -122,6 +122,25 @@
       "requires_docker": [
         "jarvis-xvfb"
       ]
+    },
+    {
+      "name": "qdrant",
+      "enabled": true,
+      "module": "mcp.qdrant_mcp",
+      "description": "Qdrant vector database for semantic memory. Collections for episodes, facts, entities, rules. 384-dim vectors (sentence-transformers MiniLM-L12-v2).",
+      "env_passthrough": [
+        "QDRANT_URL",
+        "QDRANT_API_KEY"
+      ],
+      "tools": [
+        "qdrant_create_collection",
+        "qdrant_upsert",
+        "qdrant_search",
+        "qdrant_delete"
+      ],
+      "defaults": {
+        "vector_dim": 384
+      }
     }
   ]
 }

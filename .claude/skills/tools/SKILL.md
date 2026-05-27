@@ -28,6 +28,7 @@ Tool Selection Logic
 if task involves files → use filesystem MCP (zone-aware)
 if task involves network (lab mode) → use network MCP
 if task involves GUI → use browser MCP with Playwright
+if task involves semantic search → use qdrant MCP (384-dim vectors)
 if task involves system config → use system MCP (requires Yellow+)
 if task is a quick shell command → use bash tool
 if task needs real-time data → use web_search

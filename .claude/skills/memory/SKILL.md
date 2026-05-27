@@ -19,13 +19,13 @@ Capacity: Unlimited (time-partitioned)
 Retention: 90 days raw, consolidated forever
 Access time: 10–50ms
 Schema: (id, timestamp, session_id, agent, action, input, output, score, tags)
-L3: Semantic Memory (pgvector)
+L3: Semantic Memory (Qdrant + pgvector)
 
-Storage: PostgreSQL + pgvector extension
+Storage: Qdrant vector DB (primary) + PostgreSQL pgvector (fallback)
 Capacity: Millions of embeddings
 Retention: Permanent
 Access time: 10–100ms (ANN search)
-Schema: (id, content, embedding, source, confidence, created_at, updated_at)
+Schema: (id, content, embedding[384], source, confidence, created_at, updated_at)
 L4: Procedural Memory (Rules + SKILL.md)
 
 Storage: PostgreSQL rules table + filesystem SKILL.md files
@@ -49,5 +49,5 @@ Archive episodes older than 90 days to cold storage
 Known Failure Modes
 
 pgvector index corruption: rebuild with CREATE INDEX CONCURRENTLY
-Embedding model mismatch: always store model name alongside embeddings
+Embedding model mismatch: always store model name alongside embeddings. Current: sentence-transformers MiniLM-L12-v2 (384-dim)
 Duplicate facts: use cosine similarity > 0.95 for deduplication

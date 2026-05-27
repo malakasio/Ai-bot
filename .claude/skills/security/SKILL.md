@@ -45,7 +45,7 @@ Vault key derived from system entropy, never stored in plaintext
 Credentials fetched just-in-time, never held in memory > 60 seconds
 Rollback Protocol
 
-Before ANY destructive operation:
+Before ANY destructive operation (enforced by .claude/hooks/pre-tool-use.sh):
 
 git -C ~/jarvis stash push -m "pre-action-$(date +%s)"
 Execute action
