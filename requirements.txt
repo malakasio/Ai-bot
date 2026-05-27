@@ -61,7 +61,7 @@ deepgram-sdk==3.9.0
 elevenlabs==1.11.0
 websockets==16.0
 # openai==1.59.3           # OpenAI fallback (set OPENAI_API_KEY)
-litellm==1.56.1          # Multi-provider LLM routing
+litellm==1.56.2          # Multi-provider LLM routing
 
 # ─── Testing ──────────────────────────────────────────────────────────────────
 pytest==8.3.4
