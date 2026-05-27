@@ -77,8 +77,10 @@ class Router:
             server_name, tool_name = tool.split(".", 1)
             return server_name, tool_name
         bare = self._tool_index.get(tool)
-        if not bare:
-            return None, tool if bare == "" else None
+        if bare is None:
+            return None, None
+        if bare == "":
+            return "", tool
         return bare, tool
 
     async def dispatch(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:

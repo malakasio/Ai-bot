@@ -1,9 +1,9 @@
 {
-  "apiEndpoint": "",
+  "apiEndpoint": "https://api.neutralbeats.com/v1",
   "openRouterApiKey": "",
   "anthropicApiKey": "none",
   "primaryModel": "claude-sonnet-4-6",
-  "fastModel": "claude-sonnet-4-6",
+  "fastModel": "claude-haiku-4-5",
   "enableExperimentalFeatures": false,
   "disablePromptCaching": false,
   "bash_timeout": 120000,

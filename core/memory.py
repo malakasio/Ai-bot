@@ -330,7 +330,7 @@ async def record_skill_outcome(
     lesson: Optional[str] = None,
 ) -> None:
     """Update skill counters and (optionally) append a lesson."""
-    async with await database.transaction() as conn:
+    async with database.transaction() as conn:
         skill = await conn.fetchrow("SELECT id FROM skills WHERE name = $1", name)
         if not skill:
             return
@@ -436,7 +436,7 @@ async def claim_next_task(worker_id: Optional[str] = None) -> Optional[QueuedTas
     drain the queue concurrently without stepping on each other.
     """
     worker = worker_id or _WORKER_ID
-    async with await database.transaction() as conn:
+    async with database.transaction() as conn:
         row = await conn.fetchrow(
             """
             SELECT id, kind, target, payload, priority, attempts,

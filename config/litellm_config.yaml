@@ -1,0 +1,82 @@
+# LiteLLM Proxy Configuration — J.A.R.V.I.S. v7.0
+# Routes LLM requests through NeutralBeats proxy, with fallback chains.
+#
+# Start: litellm --config config/litellm_config.yaml --port 4000
+
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+  disable_master_key_return: true
+
+model_list:
+  # ─── Primary model: Claude Sonnet via NeutralBeats ─────────────────────
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: openai/claude-sonnet-4-6
+      api_base: https://api.neutralbeats.com/v1
+      api_key: ${NEUTRALBEATS_API_KEY}
+      rpm: 100
+      timeout: 120
+      max_retries: 3
+    model_info:
+      mode: chat
+      max_tokens: 200000
+      supports_function_calling: true
+      supports_vision: true
+
+  # ─── Fast model: Claude Haiku via NeutralBeats ─────────────────────────
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: openai/claude-haiku-4-5
+      api_base: https://api.neutralbeats.com/v1
+      api_key: ${NEUTRALBEATS_API_KEY}
+      rpm: 200
+      timeout: 60
+      max_retries: 3
+    model_info:
+      mode: chat
+      max_tokens: 200000
+      supports_function_calling: true
+      supports_vision: true
+
+  # ─── Heavy model: Claude Opus via NeutralBeats ─────────────────────────
+  - model_name: claude-opus-4-7
+    litellm_params:
+      model: openai/claude-opus-4-7
+      api_base: https://api.neutralbeats.com/v1
+      api_key: ${NEUTRALBEATS_API_KEY}
+      rpm: 50
+      timeout: 180
+      max_retries: 3
+    model_info:
+      mode: chat
+      max_tokens: 200000
+      supports_function_calling: true
+      supports_vision: true
+
+  # ─── Fallback: Groq free tier ──────────────────────────────────────────
+  - model_name: groq-fallback
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: ${GROQ_API_KEY}
+      rpm: 30
+      timeout: 60
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 120
+
+router_settings:
+  routing_strategy: "usage-based-routing-v2"
+  enable_pre_call_checks: true
+  num_retries: 3
+  retry_after: 2
+  fallbacks:
+    - claude-sonnet-4-6:
+        - claude-haiku-4-5
+        - groq-fallback
+    - claude-opus-4-7:
+        - claude-sonnet-4-6
+        - groq-fallback
+    - claude-haiku-4-5:
+        - groq-fallback
