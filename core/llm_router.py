@@ -7,13 +7,15 @@ Strategy:
 2. Task-aware model selection (Haiku for simple, Sonnet for code, Opus for architecture)
 
 Provider priority:
-- Anthropic (Claude) — if ANTHROPIC_API_KEY set
+- LiteLLM proxy (localhost:4000) — primary routing layer
+- Anthropic/NeutralBeats (Claude) — if ANTHROPIC_API_KEY set, direct
 - Groq (free cloud) — if GROQ_API_KEY set
 - Ollama (local) — fallback
 
 Environment variables:
 - ANTHROPIC_API_KEY: Enable Claude models
 - GROQ_API_KEY: Enable Groq free tier
+- LITELLM_BASE_URL: LiteLLM proxy endpoint (default: http://localhost:4000)
 - OLLAMA_BASE_URL: Ollama endpoint (default: http://localhost:11434)
 """
 
