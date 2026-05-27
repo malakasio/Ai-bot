@@ -135,7 +135,7 @@ async def fetchval(query: str, *args: Any) -> Any:
         return await conn.fetchval(query, *args)
 
 
-async def transaction():
+def transaction():
     """Async context manager yielding a connection in a transaction.
 
     Usage:
