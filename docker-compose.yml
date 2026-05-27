@@ -29,6 +29,24 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-jarvis}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jarvis}
       POSTGRES_INITDB_ARGS: "--data-checksums"
+    profiles:
+      - full
+      - vector
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jarvis} -d ${POSTGRES_DB:-jarvis}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jarvis_internal
+    restart: unless-stopped
+
   # ─── Qdrant Vector DB (semantic memory) ──────────────────────────────
   qdrant:
     image: qdrant/qdrant:latest
@@ -47,20 +65,6 @@ services:
     profiles:
       - full
       - vector
-
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jarvis} -d ${POSTGRES_DB:-jarvis}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - jarvis_internal
-    restart: unless-stopped
 
   # ─── n8n workflow automation ──────────────────────────────────────────
   # JARVIS triggers webhooks here via the automation MCP server.
