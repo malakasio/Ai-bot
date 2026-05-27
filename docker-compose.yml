@@ -64,6 +64,7 @@ services:
 
   # ─── n8n workflow automation ──────────────────────────────────────────
   # JARVIS triggers webhooks here via the automation MCP server.
+  # ─── Qdrant Vector DB (semantic memory) ──────────────────────────────
   n8n:
     image: n8nio/n8n:latest
     container_name: jarvis-n8n
